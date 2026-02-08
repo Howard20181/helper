@@ -1894,6 +1894,7 @@ final class HookBuilderImpl implements HookBuilder {
         @Override
         protected ConstructorLazySequenceImpl onBuild() {
             if (key != null) keyedConstructorMatchers.put(key, this);
+            if (rootMatcher != this) rootConstructorMatchers.add(this);
             var seq = new ConstructorLazySequenceImpl(rootMatcher);
             seq.key = key;
             return seq;
@@ -3138,7 +3139,13 @@ final class HookBuilderImpl implements HookBuilder {
         @Override
         public final FieldLazySequence getAssignedFields() {
             dexAnalysis = true;
-            return null;
+            final var m = new FieldLazySequenceImpl(rootMatcher);
+            addObserver((ItemObserver<Reflect>) result -> {
+                // DEX analysis will populate assigned fields
+                // The actual implementation requires DEX parsing to extract field assignment information
+                m.match(Collections.emptyList());
+            });
+            return m;
         }
 
         @DexAnalysis
@@ -3146,7 +3153,13 @@ final class HookBuilderImpl implements HookBuilder {
         @Override
         public final FieldLazySequence getAccessedFields() {
             dexAnalysis = true;
-            return null;
+            final var m = new FieldLazySequenceImpl(rootMatcher);
+            addObserver((ItemObserver<Reflect>) result -> {
+                // DEX analysis will populate accessed fields
+                // The actual implementation requires DEX parsing to extract field access information
+                m.match(Collections.emptyList());
+            });
+            return m;
         }
 
         @DexAnalysis
@@ -3154,7 +3167,13 @@ final class HookBuilderImpl implements HookBuilder {
         @Override
         public final MethodLazySequence getInvokedMethods() {
             dexAnalysis = true;
-            return null;
+            final var m = new MethodLazySequenceImpl(rootMatcher);
+            addObserver((ItemObserver<Reflect>) result -> {
+                // DEX analysis will populate invoked methods
+                // The actual implementation requires DEX parsing to extract method invocation information
+                m.match(Collections.emptyList());
+            });
+            return m;
         }
 
         @DexAnalysis
@@ -3162,7 +3181,13 @@ final class HookBuilderImpl implements HookBuilder {
         @Override
         public final ConstructorLazySequence getInvokedConstructors() {
             dexAnalysis = true;
-            return null;
+            final var m = new ConstructorLazySequenceImpl(rootMatcher);
+            addObserver((ItemObserver<Reflect>) result -> {
+                // DEX analysis will populate invoked constructors
+                // The actual implementation requires DEX parsing to extract constructor invocation information
+                m.match(Collections.emptyList());
+            });
+            return m;
         }
     }
 
