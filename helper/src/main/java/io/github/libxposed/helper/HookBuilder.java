@@ -76,22 +76,15 @@ import io.github.libxposed.api.XposedInterface;
  *
  *     @Override
  *     public void onPackageLoaded(PackageLoadedParam param) {
- *         String packageName = param.getPackageName();
  *         ApplicationInfo appInfo = param.getApplicationInfo();
- *         File cacheDir = new File(appInfo.dataDir, "cache");
- *         File cacheFile = new File(cacheDir, ".cache");
+ *         File cacheDir = new File(appInfo.dataDir, "cache/libxposed");
+ *         File cacheFile = new File(cacheDir, "parseDex.json");
  *
  *         HookBuilder.buildHooks(this, param.getClassLoader(),
  *                 appInfo.sourceDir, builder -> {
- *
- *             // Configure cache for DEX analysis results
  *             if (cacheFile.exists()) {
  *                 try {
  *                     builder.setCacheInputStream(new FileInputStream(cacheFile));
- *                     builder.setCacheChecker(metadata -> {
- *                         Long cachedVersion = (Long) metadata.get("versionCode");
- *                         return appInfo.longVersionCode == cachedVersion;
- *                     });
  *                 } catch (IOException e) {
  *                     log("Failed to load cache", e);
  *                 }
@@ -162,9 +155,9 @@ public interface HookBuilder {
      * <pre>{@code
      * @Override
      * public void onPackageLoaded(PackageLoadedParam param) {
-     *     String pkgName = param.getPackageName();
      *     ApplicationInfo appInfo = param.getApplicationInfo();
-     *     File cacheFile = new File(appInfo.dataDir, ".cache");
+     *     var cacheDir = new File(param.getApplicationInfo().dataDir, "cache/libxposed");
+     *     File cacheFile = new File(cacheDir, "parseDex.json");
      *
      *     Future<?> future = HookBuilder.buildHooks(this, param.getClassLoader(),
      *             appInfo.sourceDir, builder -> {
@@ -173,12 +166,6 @@ public interface HookBuilder {
      *         if (cacheFile.exists()) {
      *             try {
      *                 builder.setCacheInputStream(new FileInputStream(cacheFile));
-     *
-     *                 // Validate cache by checking app versionCode
-     *                 builder.setCacheChecker(metadata -> {
-     *                     Long cachedVersion = (Long) metadata.get("versionCode");
-     *                     return appInfo.longVersionCode == cachedVersion;
-     *                 });
      *             } catch (IOException e) {
      *                 log("Cache read failed", e);
      *             }
@@ -199,7 +186,7 @@ public interface HookBuilder {
      *         builder.setExecutorService(Executors.newFixedThreadPool(4));
      *
      *         // 5. Run match callbacks on specific thread (e.g., main thread)
-     *         builder.setCallbackHandler(new Handler(Looper.getMainLooper()));
+     *         // builder.setCallbackHandler(new Handler(Looper.getMainLooper()));
      *
      *         // 6. Handle errors gracefully
      *         builder.setExceptionHandler(throwable -> {
@@ -287,10 +274,24 @@ public interface HookBuilder {
     /**
      * Sets a predicate to validate cached analysis results.
      *
-     * <p>The predicate receives metadata about the cached results and returns true
-     * if the cache is still valid. This allows versioning of cache data.
+     * <p>The predicate receives the cacheInfo map (containing metadata about the cache)
+     * and returns {@code true} if the cache should be used, or {@code false} to rebuild.
      *
-     * @param cacheChecker predicate that validates cache metadata
+     * <p><b>Default behavior (if not set):</b> The framework automatically checks if the
+     * DEX file's {@code lastModifyTime} has changed. If the timestamp differs from the
+     * cached value, the cache is invalidated and rebuilt. This handles most use cases
+     * without requiring custom validation.
+     *
+     * <p>Example (optional custom validation):
+     * <pre>{@code
+     * builder.setCacheChecker(cacheInfo -> {
+     *     // Add custom checks beyond lastModifyTime
+     *     Object customData = cacheInfo.get("myCustomData");
+     *     return customData != null && validateCustomData(customData);
+     * });
+     * }</pre>
+     *
+     * @param cacheChecker predicate that tests the cacheInfo map
      * @return this builder for method chaining
      */
     @NonNull
@@ -459,9 +460,23 @@ public interface HookBuilder {
      * Finds a method by its exact signature.
      *
      * <p>The signature format is: "className->methodName(paramTypes)returnType"
-     * Example: "android.app.Activity->onCreate(android.os.Bundle)V"
+     * where paramTypes and returnType are in Smali format.
      *
-     * @param signature the method signature in smali format
+     * <p>Smali type format:
+     * <ul>
+     *   <li>Primitive types: I (int), Z (boolean), F (float), J (long), S (short), B (byte), D (double), C (char), V (void)</li>
+     *   <li>Object types: Lpackage/name/ClassName; (e.g., Landroid/os/Bundle;)</li>
+     *   <li>Array types: [ prefix (e.g., [I for int[], [Landroid/os/Bundle; for Bundle[])</li>
+     * </ul>
+     *
+     * <p>Examples:
+     * <ul>
+     *   <li>"android.app.Activity->onCreate(Landroid/os/Bundle;)V" - method with Bundle parameter returning void</li>
+     *   <li>"java.lang.String->substring(II)Ljava/lang/String;" - method with two int parameters returning String</li>
+     *   <li>"com.example.MyClass->getData([I)Z" - method with int array parameter returning boolean</li>
+     * </ul>
+     *
+     * @param signature the method signature in Smali format
      * @return a method match object
      */
     @NonNull
@@ -480,9 +495,23 @@ public interface HookBuilder {
      * Finds a constructor by its exact signature.
      *
      * <p>The signature format is: "className-><init>(paramTypes)V"
-     * Example: "android.app.Activity-><init>()V"
+     * where paramTypes are in Smali format and return type is always V (void).
      *
-     * @param signature the constructor signature in smali format
+     * <p>Smali type format:
+     * <ul>
+     *   <li>Primitive types: I (int), Z (boolean), F (float), J (long), S (short), B (byte), D (double), C (char)</li>
+     *   <li>Object types: Lpackage/name/ClassName; (e.g., Landroid/content/Context;)</li>
+     *   <li>Array types: [ prefix (e.g., [I for int[], [Ljava/lang/String; for String[])</li>
+     * </ul>
+     *
+     * <p>Examples:
+     * <ul>
+     *   <li>"android.app.Activity-><init>()V" - no-arg constructor</li>
+     *   <li>"android.view.View-><init>(Landroid/content/Context;)V" - constructor with Context parameter</li>
+     *   <li>"java.lang.String-><init>([C)V" - constructor with char array parameter</li>
+     * </ul>
+     *
+     * @param signature the constructor signature in Smali format
      * @return a constructor match object
      */
     @NonNull
@@ -501,9 +530,23 @@ public interface HookBuilder {
      * Finds a field by its exact signature.
      *
      * <p>The signature format is: "className->fieldName:fieldType"
-     * Example: "android.app.Activity->mFinished:Z"
+     * where fieldType is in Smali format.
      *
-     * @param signature the field signature in smali format
+     * <p>Smali type format:
+     * <ul>
+     *   <li>Primitive types: I (int), Z (boolean), F (float), J (long), S (short), B (byte), D (double), C (char)</li>
+     *   <li>Object types: Lpackage/name/ClassName; (e.g., Ljava/lang/String;)</li>
+     *   <li>Array types: [ prefix (e.g., [I for int[], [Ljava/lang/Object; for Object[])</li>
+     * </ul>
+     *
+     * <p>Examples:
+     * <ul>
+     *   <li>"android.app.Activity->mFinished:Z" - boolean field</li>
+     *   <li>"java.lang.Thread->name:Ljava/lang/String;" - String field</li>
+     *   <li>"com.example.MyClass->data:[I" - int array field</li>
+     * </ul>
+     *
+     * @param signature the field signature in Smali format
      * @return a field match object
      */
     @NonNull
@@ -989,8 +1032,95 @@ public interface HookBuilder {
         /**
          * Matches executables by parameter criteria using syntax.
          *
+         * <p>This method allows matching methods or constructors based on their parameter types,
+         * positions, and other characteristics. It accepts a {@link Syntax} object containing
+         * parameter matching rules.
+         *
+         * <p><b>Example 1: Match method with specific parameter types in order</b>
+         * <pre>{@code
+         * builder.firstMethod(m -> m
+         *     .setDeclaringClass(builder.exactClass("com.example.MyClass"))
+         *     .setName(builder.exact("myMethod"))
+         *     // Match method with parameters (String, int, boolean)
+         *     .setParameters(m.conjunction(
+         *         String.class,
+         *         int.class,
+         *         boolean.class
+         *     ))
+         * ).onMatch(method -> {
+         *     hook(method, MyHooker.class);
+         * });
+         * }</pre>
+         *
+         * <p><b>Example 2: Match method with parameter at specific index</b>
+         * <pre>{@code
+         * builder.firstMethod(m -> m
+         *     .setDeclaringClass(builder.exactClass("com.example.MyClass"))
+         *     .setName(builder.exact("processData"))
+         *     // Match method where the second parameter (index 1) is a String
+         *     .setParameters(m.observe(1, String.class))
+         * ).onMatch(method -> {
+         *     hook(method, MyHooker.class);
+         * });
+         * }</pre>
+         *
+         * <p><b>Example 3: Match method with parameter using ClassMatch</b>
+         * <pre>{@code
+         * builder.firstMethod(m -> m
+         *     .setDeclaringClass(builder.exactClass("com.example.MyClass"))
+         *     .setName(builder.exact("handle"))
+         *     // Match method where first parameter extends/implements specific class
+         *     .setParameters(m.observe(0,
+         *         builder.firstClass(c -> c
+         *             .setName(builder.contains("Handler"))
+         *         )
+         *     ))
+         * ).onMatch(method -> {
+         *     hook(method, MyHooker.class);
+         * });
+         * }</pre>
+         *
+         * <p><b>Example 4: Match method with complex parameter matching</b>
+         * <pre>{@code
+         * builder.firstMethod(m -> m
+         *     .setDeclaringClass(builder.exactClass("com.example.MyClass"))
+         *     .setName(builder.exact("complexMethod"))
+         *     // Match using firstParameter for detailed parameter criteria
+         *     .setParameters(m.firstParameter(p -> p
+         *         .setIndex(0)
+         *         .setType(builder.firstClass(c -> c
+         *             .setName(builder.exact("android.content.Context"))
+         *         ))
+         *     ).observe())
+         * ).onMatch(method -> {
+         *     hook(method, MyHooker.class);
+         * });
+         * }</pre>
+         *
+         * <p><b>Example 5: Match method with multiple specific parameters</b>
+         * <pre>{@code
+         * // Match method with parameters: (Context, String, int[])
+         * builder.firstMethod(m -> m
+         *     .setDeclaringClass(builder.exactClass("com.example.Service"))
+         *     .setName(builder.exact("initialize"))
+         *     .setParameters(m.conjunction(
+         *         builder.exactClass("android.content.Context"),
+         *         builder.exactClass(String.class),
+         *         builder.exactClass(int[].class)
+         *     ))
+         * ).onMatch(method -> {
+         *     hook(method, MyHooker.class);
+         * });
+         * }</pre>
+         *
          * @param parameters the syntax for matching parameters
          * @return this matcher for method chaining
+         * @see #conjunction(Class[])
+         * @see #conjunction(ClassMatch[])
+         * @see #observe(int, Class)
+         * @see #observe(int, ClassMatch)
+         * @see #firstParameter(Consumer)
+         * @see #parameters(Consumer)
          */
         @NonNull
         Self setParameters(@NonNull Syntax<ParameterMatch> parameters);

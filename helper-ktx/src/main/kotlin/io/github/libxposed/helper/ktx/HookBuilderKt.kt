@@ -310,6 +310,88 @@ sealed class ExecutableMatcherKt<Matcher>(matcher: Matcher) :
             matcher.setParameterCount(value)
         }
 
+    /**
+     * Matches executables by parameter criteria using syntax.
+     *
+     * This property allows matching methods or constructors based on their parameter types,
+     * positions, and other characteristics. It accepts a [SyntaxKt] object containing
+     * parameter matching rules.
+     *
+     * Example 1: Match method with specific parameter types in order
+     * ```kotlin
+     * firstMethod {
+     *     declaringClass = exactClass("com.example.MyClass")
+     *     name = exact("myMethod")
+     *     // Match method with parameters (String, Int, Boolean)
+     *     parameters = conjunction(String::class.java, Int::class.javaPrimitiveType!!, Boolean::class.javaPrimitiveType!!)
+     * } onMatch { method ->
+     *     hook(method, MyHooker::class.java)
+     * }
+     * ```
+     *
+     * Example 2: Match method with parameter at specific index
+     * ```kotlin
+     * firstMethod {
+     *     declaringClass = exactClass("com.example.MyClass")
+     *     name = exact("processData")
+     *     // Match method where the second parameter (index 1) is a String
+     *     parameters = String::class.java[1]
+     * } onMatch { method ->
+     *     hook(method, MyHooker::class.java)
+     * }
+     * ```
+     *
+     * Example 3: Match method with parameter using ClassMatchKt
+     * ```kotlin
+     * firstMethod {
+     *     declaringClass = exactClass("com.example.MyClass")
+     *     name = exact("handle")
+     *     // Match method where first parameter matches a class pattern
+     *     parameters = firstClass {
+     *         name = contains("Handler")
+     *     }[0]
+     * } onMatch { method ->
+     *     hook(method, MyHooker::class.java)
+     * }
+     * ```
+     *
+     * Example 4: Match method with complex parameter matching
+     * ```kotlin
+     * firstMethod {
+     *     declaringClass = exactClass("com.example.MyClass")
+     *     name = exact("complexMethod")
+     *     // Match using firstParameter for detailed parameter criteria
+     *     parameters = firstParameter {
+     *         index = 0
+     *         type = firstClass {
+     *             name = exact("android.content.Context")
+     *         }
+     *     }.observe()
+     * } onMatch { method ->
+     *     hook(method, MyHooker::class.java)
+     * }
+     * ```
+     *
+     * Example 5: Match method with multiple specific parameters using conjunction
+     * ```kotlin
+     * // Match method with parameters: (Context, String, IntArray)
+     * firstMethod {
+     *     declaringClass = exactClass("com.example.Service")
+     *     name = exact("initialize")
+     *     parameters = conjunction(
+     *         exactClass("android.content.Context"),
+     *         exactClass(String::class.java),
+     *         exactClass(IntArray::class.java)
+     *     )
+     * } onMatch { method ->
+     *     hook(method, MyHooker::class.java)
+     * }
+     * ```
+     *
+     * @see conjunction
+     * @see firstParameter
+     * @see parameters
+     */
     var parameters: SyntaxKt<ParameterMatchKt, ParameterMatch>
         @Deprecated(
             "Write only", level = DeprecationLevel.HIDDEN
@@ -1001,10 +1083,55 @@ class HookBuilderKt(@PublishedApi internal val builder: HookBuilder) {
         inline get() = StringMatchKt(builder.firstPrefix(this))
     val String.exactClass: ClassMatchKt
         inline get() = ClassMatchKt(builder.exactClass(this))
+
+    /**
+     * Finds a method by its exact signature in smali format.
+     *
+     * Format: "className->methodName(paramTypes)returnType"
+     *
+     * Smali type format:
+     * - Primitive: I (int), Z (boolean), F (float), J (long), S (short), B (byte), D (double), C (char), V (void)
+     * - Object: Lpackage/name/ClassName; (e.g., Landroid/os/Bundle;)
+     * - Array: [ prefix (e.g., [I for int[], [Landroid/os/Bundle; for Bundle[])
+     *
+     * Examples:
+     * - "android.app.Activity->onCreate(Landroid/os/Bundle;)V"
+     * - "java.lang.String->substring(II)Ljava/lang/String;"
+     */
     val String.exactMethod: MethodMatchKt
         inline get() = MethodMatchKt(builder.exactMethod(this))
+
+    /**
+     * Finds a constructor by its exact signature in smali format.
+     *
+     * Format: "className-><init>(paramTypes)V"
+     *
+     * Smali type format:
+     * - Primitive: I (int), Z (boolean), F (float), J (long), S (short), B (byte), D (double), C (char)
+     * - Object: Lpackage/name/ClassName; (e.g., Landroid/content/Context;)
+     * - Array: [ prefix (e.g., [I for int[], [Ljava/lang/String; for String[])
+     *
+     * Examples:
+     * - "android.app.Activity-><init>()V"
+     * - "android.view.View-><init>(Landroid/content/Context;)V"
+     */
     val String.exactConstructor: ConstructorMatchKt
         inline get() = ConstructorMatchKt(builder.exactConstructor(this))
+
+    /**
+     * Finds a field by its exact signature in smali format.
+     *
+     * Format: "className->fieldName:fieldType"
+     *
+     * Smali type format:
+     * - Primitive: I (int), Z (boolean), F (float), J (long), S (short), B (byte), D (double), C (char)
+     * - Object: Lpackage/name/ClassName; (e.g., Ljava/lang/String;)
+     * - Array: [ prefix (e.g., [I for int[], [Ljava/lang/Object; for Object[])
+     *
+     * Examples:
+     * - "android.app.Activity->mFinished:Z"
+     * - "java.lang.Thread->name:Ljava/lang/String;"
+     */
     val String.exactField: FieldMatchKt
         inline get() = FieldMatchKt(builder.exactField(this))
 }
