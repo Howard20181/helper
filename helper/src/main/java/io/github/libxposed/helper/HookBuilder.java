@@ -70,8 +70,6 @@ import io.github.libxposed.api.XposedInterface;
  * <p>Advanced example with DEX analysis cache and configuration:
  * <pre>{@code
  * public class MyModule extends XposedModule {
- *     private static final String CACHE_VERSION = "v1.0.0";
- *
  *     public MyModule(XposedInterface base, ModuleLoadedParam param) {
  *         super(base, param);
  *     }
@@ -79,19 +77,20 @@ import io.github.libxposed.api.XposedInterface;
  *     @Override
  *     public void onPackageLoaded(PackageLoadedParam param) {
  *         String packageName = param.getPackageName();
- *         File cacheDir = new File(param.getApplicationInfo().dataDir, "cache");
+ *         ApplicationInfo appInfo = param.getApplicationInfo();
+ *         File cacheDir = new File(appInfo.dataDir, "cache");
  *         File cacheFile = new File(cacheDir, ".cache");
  *
  *         HookBuilder.buildHooks(this, param.getClassLoader(),
- *                 param.getApplicationInfo().sourceDir, builder -> {
+ *                 appInfo.sourceDir, builder -> {
  *
  *             // Configure cache for DEX analysis results
  *             if (cacheFile.exists()) {
  *                 try {
  *                     builder.setCacheInputStream(new FileInputStream(cacheFile));
  *                     builder.setCacheChecker(metadata -> {
- *                         String version = (String) metadata.get("version");
- *                         return CACHE_VERSION.equals(version);
+ *                         Long cachedVersion = (Long) metadata.get("versionCode");
+ *                         return appInfo.longVersionCode == cachedVersion;
  *                     });
  *                 } catch (IOException e) {
  *                     log("Failed to load cache", e);
@@ -164,23 +163,21 @@ public interface HookBuilder {
      * @Override
      * public void onPackageLoaded(PackageLoadedParam param) {
      *     String pkgName = param.getPackageName();
-     *     File cacheFile = new File(getApplicationInfo().dataDir,
-     *                              "cache/" + pkgName + ".cache");
+     *     ApplicationInfo appInfo = param.getApplicationInfo();
+     *     File cacheFile = new File(appInfo.dataDir, ".cache");
      *
      *     Future<?> future = HookBuilder.buildHooks(this, param.getClassLoader(),
-     *             param.getApplicationInfo().sourceDir, builder -> {
+     *             appInfo.sourceDir, builder -> {
      *
      *         // 1. Setup cache input - read previously saved DEX analysis results
      *         if (cacheFile.exists()) {
      *             try {
      *                 builder.setCacheInputStream(new FileInputStream(cacheFile));
      *
-     *                 // Validate cache version to ensure compatibility
+     *                 // Validate cache by checking app versionCode
      *                 builder.setCacheChecker(metadata -> {
-     *                     String version = (String) metadata.get("version");
-     *                     String appVersion = (String) metadata.get("appVersion");
-     *                     return "1.0".equals(version) &&
-     *                            param.getApplicationInfo().versionName.equals(appVersion);
+     *                     Long cachedVersion = (Long) metadata.get("versionCode");
+     *                     return appInfo.longVersionCode == cachedVersion;
      *                 });
      *             } catch (IOException e) {
      *                 log("Cache read failed", e);
