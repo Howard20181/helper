@@ -47,7 +47,7 @@ import io.github.libxposed.api.XposedInterface;
  *
  *     @Override
  *     public void onPackageLoaded(PackageLoadedParam param) {
- *         HookBuilder.buildHooks(this, param.getClassLoader(),
+ *         var future = HookBuilder.buildHooks(this, param.getClassLoader(),
  *                 param.getApplicationInfo().sourceDir, builder -> {
  *             builder.firstMethod(m -> m
  *                 .setDeclaringClass(builder.exactClass("android.app.Activity"))
@@ -57,6 +57,7 @@ import io.github.libxposed.api.XposedInterface;
  *                 hook(method, ActivityHooker.class);
  *             });
  *         });
+ *         try { future.get(); } catch (Exception e) { }
  *     }
  *
  *     public static class ActivityHooker implements Hooker {
@@ -80,7 +81,7 @@ import io.github.libxposed.api.XposedInterface;
  *         File cacheDir = new File(appInfo.dataDir, "cache/libxposed");
  *         File cacheFile = new File(cacheDir, "parseDex.json");
  *
- *         HookBuilder.buildHooks(this, param.getClassLoader(),
+ *         var future = HookBuilder.buildHooks(this, param.getClassLoader(),
  *                 appInfo.sourceDir, builder -> {
  *             if (cacheFile.exists()) {
  *                 try {
@@ -119,6 +120,7 @@ import io.github.libxposed.api.XposedInterface;
  *                 }
  *             });
  *         });
+ *         try { future.get(); } catch (Exception e) { }
  *     }
  * }
  * }</pre>
@@ -138,7 +140,7 @@ public interface HookBuilder {
      * <pre>{@code
      * @Override
      * public void onPackageLoaded(PackageLoadedParam param) {
-     *     HookBuilder.buildHooks(this, param.getClassLoader(),
+     *     var future = HookBuilder.buildHooks(this, param.getClassLoader(),
      *             param.getApplicationInfo().sourceDir, builder -> {
      *         // Match and hook methods
      *         builder.firstMethod(m -> m
@@ -148,6 +150,7 @@ public interface HookBuilder {
      *             hook(method, MyHooker.class);
      *         });
      *     });
+     *     try { future.get(); } catch (Exception e) { }
      * }
      * }</pre>
      *
@@ -215,8 +218,8 @@ public interface HookBuilder {
      *         });
      *     });
      *
-     *     // Optionally wait for completion (blocks current thread)
-     *     // try { future.get(); } catch (Exception e) { }
+     *     // Must call and wait for completion (blocks current thread)
+     *     try { future.get(); } catch (Exception e) { }
      * }
      * }</pre>
      *
