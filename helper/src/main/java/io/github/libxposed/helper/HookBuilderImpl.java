@@ -15,6 +15,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.OutputStream;
 import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Array;
@@ -425,6 +426,7 @@ final class HookBuilderImpl implements HookBuilder {
                     callbackExecutor.joinAll();
                 }
                 done = true;
+                saveMatchCache();
                 return null;
             }
 
@@ -448,6 +450,7 @@ final class HookBuilderImpl implements HookBuilder {
                     callbackExecutor.joinAll(unit.convert(nanos - (System.nanoTime() - now), TimeUnit.NANOSECONDS), unit);
                 }
                 done = true;
+                saveMatchCache();
                 return null;
             }
         };
@@ -791,6 +794,85 @@ final class HookBuilderImpl implements HookBuilder {
         }
     }
 
+    private void saveMatchCache() {
+        if (cacheOutputStream == null || matchCache == null) {
+            return;
+        }
+        try {
+            try (var out = new ObjectOutputStream(cacheOutputStream)) {
+                out.writeObject(matchCache.cacheInfo);
+                out.writeObject(matchCache.classListCache);
+                out.writeObject(matchCache.methodListCache);
+                out.writeObject(matchCache.fieldListCache);
+                out.writeObject(matchCache.constructorListCache);
+                out.writeObject(matchCache.parameterListCache);
+
+                out.writeObject(matchCache.classCache);
+                out.writeObject(matchCache.methodCache);
+                out.writeObject(matchCache.fieldCache);
+                out.writeObject(matchCache.constructorCache);
+                out.writeObject(matchCache.parameterCache);
+            }
+        } catch (Throwable e) {
+            if (exceptionHandler != null) {
+                exceptionHandler.test(e);
+            }
+        }
+    }
+
+    private HashSet<String> encodeClasses(@Nullable Collection<Class<?>> classes) {
+        var result = new HashSet<String>();
+        if (classes == null) return result;
+        for (var clazz : classes) {
+            result.add(MatchCache.encodeClass(clazz));
+        }
+        return result;
+    }
+
+    private HashSet<String> encodeFields(@Nullable Collection<Field> fields) {
+        var result = new HashSet<String>();
+        if (fields == null) return result;
+        for (var field : fields) {
+            result.add(MatchCache.encodeField(field));
+        }
+        return result;
+    }
+
+    private HashSet<String> encodeMethods(@Nullable Collection<java.lang.reflect.Method> methods) {
+        var result = new HashSet<String>();
+        if (methods == null) return result;
+        for (var method : methods) {
+            result.add(MatchCache.encodeMethod(method));
+        }
+        return result;
+    }
+
+    private HashSet<String> encodeConstructors(@Nullable Collection<Constructor<?>> constructors) {
+        var result = new HashSet<String>();
+        if (constructors == null) return result;
+        for (var constructor : constructors) {
+            result.add(MatchCache.encodeConstructor(constructor));
+        }
+        return result;
+    }
+
+    private HashSet<AbstractMap.SimpleEntry<Integer, String>> encodeParameters(@Nullable Collection<Parameter> parameters) {
+        var result = new HashSet<AbstractMap.SimpleEntry<Integer, String>>();
+        if (parameters == null) return result;
+        for (var parameter : parameters) {
+            var executable = parameter.getDeclaringExecutable();
+            var index = ((ParameterImpl) parameter).getIndex();
+            String encodedMethod;
+            if (executable instanceof java.lang.reflect.Method) {
+                encodedMethod = MatchCache.encodeMethod((java.lang.reflect.Method) executable);
+            } else {
+                encodedMethod = MatchCache.encodeConstructor((Constructor<?>) executable);
+            }
+            result.add(new AbstractMap.SimpleEntry<>(index, encodedMethod));
+        }
+        return result;
+    }
+
     private <Reflect extends Member> void memberClassLists(MemberMatcherImpl<?, ?, Reflect, ?, ?> matcher, Transformer<Class<?>, Reflect[]> transformer) {
         final ArrayList<Class<?>> classList = new ArrayList<>();
         if (matcher.declaringClass != null) {
@@ -1096,7 +1178,9 @@ final class HookBuilderImpl implements HookBuilder {
         protected ClassLazySequenceImpl onBuild() {
             if (key != null) keyedClassMatchers.put(key, this);
             if (rootMatcher != this) rootClassMatchers.add(this);
-            return new ClassLazySequenceImpl(rootMatcher);
+            var seq = new ClassLazySequenceImpl(rootMatcher);
+            seq.key = key;
+            return seq;
         }
 
         @CallSuper
@@ -1191,7 +1275,9 @@ final class HookBuilderImpl implements HookBuilder {
         protected ParameterLazySequenceImpl onBuild() {
             if (key != null) keyedParameterMatchers.put(key, this);
 //            if (rootMatcher != this) rootParameterMatchers.add(this);
-            return new ParameterLazySequenceImpl(rootMatcher);
+            var seq = new ParameterLazySequenceImpl(rootMatcher);
+            seq.key = key;
+            return seq;
         }
 
         @Override
@@ -1338,7 +1424,9 @@ final class HookBuilderImpl implements HookBuilder {
         protected FieldLazySequenceImpl onBuild() {
             if (key != null) keyedFieldMatchers.put(key, this);
             if (rootMatcher != this) rootFieldMatchers.add(this);
-            return new FieldLazySequenceImpl(rootMatcher);
+            var seq = new FieldLazySequenceImpl(rootMatcher);
+            seq.key = key;
+            return seq;
         }
 
         @Override
@@ -1664,7 +1752,9 @@ final class HookBuilderImpl implements HookBuilder {
         protected MethodLazySequenceImpl onBuild() {
             if (key != null) keyedMethodMatchers.put(key, this);
             if (rootMatcher != this) rootMethodMatchers.add(this);
-            return new MethodLazySequenceImpl(rootMatcher);
+            var seq = new MethodLazySequenceImpl(rootMatcher);
+            seq.key = key;
+            return seq;
         }
 
         @NonNull
@@ -1728,7 +1818,9 @@ final class HookBuilderImpl implements HookBuilder {
         @Override
         protected ConstructorLazySequenceImpl onBuild() {
             if (key != null) keyedConstructorMatchers.put(key, this);
-            return new ConstructorLazySequenceImpl(rootMatcher);
+            var seq = new ConstructorLazySequenceImpl(rootMatcher);
+            seq.key = key;
+            return seq;
         }
     }
 
@@ -2035,6 +2127,8 @@ final class HookBuilderImpl implements HookBuilder {
     private abstract class LazySequenceImpl<Base extends LazySequence<Base, Match, Reflect, Matcher>, Match extends ReflectMatch<Match, Reflect, Matcher>, Reflect, Matcher extends ReflectMatcher<Matcher>, MatchImpl extends ReflectMatchImpl<MatchImpl, Match, Reflect, Matcher, MatcherImpl, DexId>, MatcherImpl extends ReflectMatcherImpl<MatcherImpl, Matcher, Reflect, DexId, ?>, DexId extends DexParser.Id<DexId>> implements LazySequence<Base, Match, Reflect, Matcher> {
         @NonNull
         protected final ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher;
+        @Nullable
+        protected String key = null;
         @NonNull
         protected final AtomicReference<int[][]> dexMatches = new AtomicReference<>(null);
         @NonNull
@@ -2198,6 +2292,11 @@ final class HookBuilderImpl implements HookBuilder {
     private class ClassLazySequenceImpl extends LazySequenceImpl<ClassLazySequence, ClassMatch, Class<?>, ClassMatcher, ClassMatchImpl, ClassMatcherImpl, DexParser.TypeId> implements ClassLazySequence {
         protected ClassLazySequenceImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            if (key != null && matchCache != null) {
+                addObserver((ListObserver<Class<?>>) matches -> {
+                    matchCache.classListCache.put(key, encodeClasses(matches));
+                });
+            }
         }
 
         @NonNull
@@ -2306,6 +2405,11 @@ final class HookBuilderImpl implements HookBuilder {
     private final class ParameterLazySequenceImpl extends LazySequenceImpl<ParameterLazySequence, ParameterMatch, Parameter, ParameterMatcher, ParameterMatchImpl, ParameterMatcherImpl, DexParser.TypeId> implements ParameterLazySequence {
         private ParameterLazySequenceImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            if (key != null && matchCache != null) {
+                addObserver((ListObserver<Parameter>) matches -> {
+                    matchCache.parameterListCache.put(key, encodeParameters(matches));
+                });
+            }
         }
 
         @NonNull
@@ -2390,6 +2494,11 @@ final class HookBuilderImpl implements HookBuilder {
     private final class FieldLazySequenceImpl extends MemberLazySequenceImpl<FieldLazySequence, FieldMatch, Field, FieldMatcher, FieldMatchImpl, FieldMatcherImpl, DexParser.FieldId> implements FieldLazySequence {
         private FieldLazySequenceImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            if (key != null && matchCache != null) {
+                addObserver((ListObserver<Field>) matches -> {
+                    matchCache.fieldListCache.put(key, encodeFields(matches));
+                });
+            }
         }
 
         private void addTypesObserver(@NonNull ClassMatcherImpl m) {
@@ -2505,6 +2614,11 @@ final class HookBuilderImpl implements HookBuilder {
     private final class MethodLazySequenceImpl extends ExecutableLazySequenceImpl<MethodLazySequence, MethodMatch, Method, MethodMatcher, MethodMatchImpl, MethodMatcherImpl> implements MethodLazySequence {
         private MethodLazySequenceImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            if (key != null && matchCache != null) {
+                addObserver((ListObserver<Method>) matches -> {
+                    matchCache.methodListCache.put(key, encodeMethods(matches));
+                });
+            }
         }
 
         private void addReturnTypesObserver(@NonNull ClassMatcherImpl m) {
@@ -2553,6 +2667,11 @@ final class HookBuilderImpl implements HookBuilder {
     private final class ConstructorLazySequenceImpl extends ExecutableLazySequenceImpl<ConstructorLazySequence, ConstructorMatch, Constructor<?>, ConstructorMatcher, ConstructorMatchImpl, ConstructorMatcherImpl> implements ConstructorLazySequence {
         private ConstructorLazySequenceImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            if (key != null && matchCache != null) {
+                addObserver((ListObserver<Constructor<?>>) matches -> {
+                    matchCache.constructorListCache.put(key, encodeConstructors(matches));
+                });
+            }
         }
 
         @NonNull
@@ -2732,6 +2851,11 @@ final class HookBuilderImpl implements HookBuilder {
     private class ClassMatchImpl extends ReflectMatchImpl<ClassMatchImpl, ClassMatch, Class<?>, ClassMatcher, ClassMatcherImpl, DexParser.TypeId> implements ClassMatch {
         protected ClassMatchImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            addObserver((ItemObserver<Class<?>>) match -> {
+                if (key != null && matchCache != null) {
+                    matchCache.classCache.put(key, MatchCache.encodeClass(match));
+                }
+            });
         }
 
         @NonNull
@@ -2804,6 +2928,23 @@ final class HookBuilderImpl implements HookBuilder {
 
         private ParameterMatchImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            addObserver((ItemObserver<Parameter>) match -> {
+                if (key != null && matchCache != null) {
+                    if (match == null) {
+                        matchCache.parameterCache.put(key, new AbstractMap.SimpleEntry<>(-1, ""));
+                    } else {
+                        var executable = match.getDeclaringExecutable();
+                        var index = ((ParameterImpl) match).getIndex();
+                        String encodedMethod;
+                        if (executable instanceof java.lang.reflect.Method) {
+                            encodedMethod = MatchCache.encodeMethod((java.lang.reflect.Method) executable);
+                        } else {
+                            encodedMethod = MatchCache.encodeConstructor((Constructor<?>) executable);
+                        }
+                        matchCache.parameterCache.put(key, new AbstractMap.SimpleEntry<>(index, encodedMethod));
+                    }
+                }
+            });
         }
 
         @NonNull
@@ -2844,6 +2985,11 @@ final class HookBuilderImpl implements HookBuilder {
     private final class FieldMatchImpl extends MemberMatchImpl<FieldMatchImpl, FieldMatch, Field, FieldMatcher, FieldMatcherImpl, DexParser.FieldId> implements FieldMatch {
         private FieldMatchImpl(ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            addObserver((ItemObserver<Field>) match -> {
+                if (key != null && matchCache != null) {
+                    matchCache.fieldCache.put(key, MatchCache.encodeField(match));
+                }
+            });
         }
 
         @NonNull
@@ -2957,6 +3103,11 @@ final class HookBuilderImpl implements HookBuilder {
     private final class MethodMatchImpl extends ExecutableMatchImpl<MethodMatchImpl, MethodMatch, Method, MethodMatcher, MethodMatcherImpl> implements MethodMatch {
         private MethodMatchImpl(ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            addObserver((ItemObserver<Method>) match -> {
+                if (key != null && matchCache != null) {
+                    matchCache.methodCache.put(key, MatchCache.encodeMethod(match));
+                }
+            });
         }
 
         @NonNull
@@ -2987,6 +3138,11 @@ final class HookBuilderImpl implements HookBuilder {
     private final class ConstructorMatchImpl extends ExecutableMatchImpl<ConstructorMatchImpl, ConstructorMatch, Constructor<?>, ConstructorMatcher, ConstructorMatcherImpl> implements ConstructorMatch {
         private ConstructorMatchImpl(ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            addObserver((ItemObserver<Constructor<?>>) match -> {
+                if (key != null && matchCache != null) {
+                    matchCache.constructorCache.put(key, MatchCache.encodeConstructor(match));
+                }
+            });
         }
 
         @NonNull

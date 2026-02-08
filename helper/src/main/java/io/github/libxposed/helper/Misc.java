@@ -233,6 +233,61 @@ final class MatchCache {
     ConcurrentHashMap<String, String> constructorCache = new ConcurrentHashMap<>();
     @NonNull
     ConcurrentHashMap<String, AbstractMap.SimpleEntry<Integer, String>> parameterCache = new ConcurrentHashMap<>();
+
+    /**
+     * Encode a Class to its string representation for caching.
+     * Returns empty string if class is null.
+     */
+    @NonNull
+    static String encodeClass(@Nullable Class<?> clazz) {
+        if (clazz == null) return "";
+        return clazz.getName();
+    }
+
+    /**
+     * Encode a Field to its string representation for caching.
+     * Format: declaringClass->fieldName:fieldType
+     * Returns empty string if field is null.
+     */
+    @NonNull
+    static String encodeField(@Nullable java.lang.reflect.Field field) {
+        if (field == null) return "";
+        return field.getDeclaringClass().getName() + "->" + field.getName() + ":" + field.getType().getName();
+    }
+
+    /**
+     * Encode a Method to its string representation for caching.
+     * Format: declaringClass->methodName(param1,param2,...)returnType
+     * Returns empty string if method is null.
+     */
+    @NonNull
+    static String encodeMethod(@Nullable java.lang.reflect.Method method) {
+        if (method == null) return "";
+        var params = new StringBuilder();
+        var parameterTypes = method.getParameterTypes();
+        for (int i = 0; i < parameterTypes.length; i++) {
+            if (i > 0) params.append(",");
+            params.append(parameterTypes[i].getName());
+        }
+        return method.getDeclaringClass().getName() + "->" + method.getName() + "(" + params + ")" + method.getReturnType().getName();
+    }
+
+    /**
+     * Encode a Constructor to its string representation for caching.
+     * Format: declaringClass-><init>(param1,param2,...)V
+     * Returns empty string if constructor is null.
+     */
+    @NonNull
+    static String encodeConstructor(@Nullable java.lang.reflect.Constructor<?> constructor) {
+        if (constructor == null) return "";
+        var params = new StringBuilder();
+        var parameterTypes = constructor.getParameterTypes();
+        for (int i = 0; i < parameterTypes.length; i++) {
+            if (i > 0) params.append(",");
+            params.append(parameterTypes[i].getName());
+        }
+        return constructor.getDeclaringClass().getName() + "-><init>(" + params + ")V";
+    }
 }
 
 final class TreeSetView<T extends Comparable<T>> implements Set<T>, SortedSet<T>, NavigableSet<T> {

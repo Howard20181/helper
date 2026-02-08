@@ -7,11 +7,10 @@ plugins {
 
 android {
     namespace = "io.github.libxposed.helper.kt"
-    compileSdk = 33
+    compileSdk = 34
 
     defaultConfig {
         minSdk = 21
-        targetSdk = 33
     }
 
     buildFeatures {
@@ -108,6 +107,6 @@ signing {
     val signingPassword = findProperty("signingPassword") as String?
     if (signingKey != null && signingPassword != null) {
         useInMemoryPgpKeys(signingKey, signingPassword)
+        sign(publishing.publications)
     }
-    sign(publishing.publications)
 }
