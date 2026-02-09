@@ -79,7 +79,7 @@ import io.github.libxposed.api.XposedInterface;
  *     public void onPackageLoaded(PackageLoadedParam param) {
  *         ApplicationInfo appInfo = param.getApplicationInfo();
  *         File cacheDir = new File(appInfo.dataDir, "cache/libxposed");
- *         File cacheFile = new File(cacheDir, "parseDex.json");
+ *         File cacheFile = new File(cacheDir, "parseDex.bin");
  *
  *         var future = HookBuilder.buildHooks(this, param.getClassLoader(),
  *                 appInfo.sourceDir, builder -> {
