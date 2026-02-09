@@ -83,6 +83,10 @@ final class HookBuilderImpl implements HookBuilder {
     @NonNull
     private final SortedSet<StringMatchImpl> stringMatches = new ConcurrentSkipListSet<>((o1, o2) -> o1.matcher.pattern.compareTo(o2.matcher.pattern));
     @NonNull
+    private final ConcurrentHashMap<Method, Set<Method>> methodInvocationsMap = new ConcurrentHashMap<>();
+    @NonNull
+    private final ConcurrentHashMap<Method, Set<Constructor<?>>> constructorInvocationsMap = new ConcurrentHashMap<>();
+    @NonNull
     private final HashMap<LazyBind, AtomicInteger> binds = new HashMap<>();
     @NonNull
     private final HashMap<String, ClassMatcherImpl> keyedClassMatchers = new HashMap<>();
@@ -544,7 +548,7 @@ final class HookBuilderImpl implements HookBuilder {
                         }
                     }
                     buf.put(result);
-                    return ctx.parseDex(buf, false);
+                    return ctx.parseDex(buf, true);
                 }));
             }
             parsers = new DexParser[tasks.size()];
@@ -552,9 +556,9 @@ final class HookBuilderImpl implements HookBuilder {
                 parsers[i] = tasks.get(i).get();
             }
         } catch (Throwable e) {
-            if (exceptionHandler != null) exceptionHandler.test(e);
             return;
         }
+
         // match strings first
         for (var d = 0; d < parsers.length; ++d) {
             final int dexId = d;
@@ -599,19 +603,115 @@ final class HookBuilderImpl implements HookBuilder {
             });
         }
 
+        // Visit all classes and methods to collect method invocation relationships
         for (final DexParser dex : parsers) {
-            matchExecutor.submit(() -> dex.visitDefinedClasses(new DexParser.ClassVisitor() {
-                @Override
-                public DexParser.MemberVisitor visit(int clazz, int accessFlags, int superClass, @NonNull int[] interfaces, int sourceFile, @NonNull int[] staticFields, @NonNull int[] staticFieldsAccessFlags, @NonNull int[] instanceFields, @NonNull int[] instanceFieldsAccessFlags, @NonNull int[] directMethods, @NonNull int[] directMethodsAccessFlags, @NonNull int[] virtualMethods, @NonNull int[] virtualMethodsAccessFlags, @NonNull int[] annotations) {
-                    return new FieldAndMethodVisitor() {
+            matchExecutor.submit(() -> {
+                try {
+                    dex.visitDefinedClasses(new DexParser.ClassVisitor() {
                         @Override
-                        public void visit(int field, int accessFlags, @NonNull int[] annotations) {
+                        public DexParser.MemberVisitor visit(int clazz, int accessFlags, int superClass, @NonNull int[] interfaces, int sourceFile, @NonNull int[] staticFields, @NonNull int[] staticFieldsAccessFlags, @NonNull int[] instanceFields, @NonNull int[] instanceFieldsAccessFlags, @NonNull int[] directMethods, @NonNull int[] directMethodsAccessFlags, @NonNull int[] virtualMethods, @NonNull int[] virtualMethodsAccessFlags, @NonNull int[] annotations) {
+                            return new FieldAndMethodVisitor() {
+                                @Override
+                                public void visit(int field, int accessFlags, @NonNull int[] annotations) {
+                                    // Field visitor - not needed for method invocations
+                                }
 
-                        }
+                            @Override
+                            public DexParser.MethodBodyVisitor visit(int method, int accessFlags, boolean hasBody, @NonNull int[] annotations, @NonNull int[] parameterAnnotations) {
+                                if (!hasBody) {
+                                    return null;
+                                }
 
-                        @Override
-                        public DexParser.MethodBodyVisitor visit(int method, int accessFlags, boolean hasBody, @NonNull int[] annotations, @NonNull int[] parameterAnnotations) {
-                            return (ignored1, ignored2, referredStrings, invokedMethods, accessedFields, assignedFields, opcodes) -> {
+                                return (ignored1, ignored2, referredStrings, invokedMethods, accessedFields, assignedFields, opcodes) -> {
+                                    if (invokedMethods.length == 0) {
+                                        return;
+                                    }
+
+                                    try {
+                                        var allMethodIds = dex.getMethodId();
+                                        if (method < 0 || method >= allMethodIds.length) {
+                                            return;
+                                        }
+
+                                        // Get current method info
+                                        var currentMethodId = allMethodIds[method];
+                                        var currentClassName = currentMethodId.getDeclaringClass().getDescriptor().getString();
+                                        var currentMethodName = currentMethodId.getName().getString();
+                                        var currentProto = currentMethodId.getPrototype();
+
+                                        // Try to resolve current method via reflection
+                                        Method currentMethod;
+                                        try {
+                                            var currentClass = reflector.loadClass(currentClassName);
+                                            var currentParamTypes = getParameterTypesFromProto(currentProto);
+                                            if (currentParamTypes == null) {
+                                                return;
+                                            }
+                                            currentMethod = currentClass.getDeclaredMethod(currentMethodName, currentParamTypes);
+                                        } catch (ClassNotFoundException | NoSuchMethodException e) {
+                                            return;
+                                        }
+
+                                            // Collect all methods and constructors invoked by this method
+                                            Set<Method> invokedMethodsSet = new HashSet<>();
+                                            Set<Constructor<?>> invokedConstructorsSet = new HashSet<>();
+
+                                            for (int invokedMethodIdx : invokedMethods) {
+                                                if (invokedMethodIdx < 0 || invokedMethodIdx >= allMethodIds.length) {
+                                                    continue;
+                                                }
+
+                                                try {
+                                                    var invokedMethodId = allMethodIds[invokedMethodIdx];
+                                                    var invokedClassName = invokedMethodId.getDeclaringClass().getDescriptor().getString();
+                                                    var invokedMethodName = invokedMethodId.getName().getString();
+                                                    var invokedProto = invokedMethodId.getPrototype();
+
+                                                    var invokedClass = reflector.loadClass(invokedClassName);
+                                                    var invokedParamTypes = getParameterTypesFromProto(invokedProto);
+
+                                                    if (invokedParamTypes != null) {
+                                                        // Check if it's a constructor
+                                                        if ("<init>".equals(invokedMethodName)) {
+                                                            try {
+                                                                var constructor = invokedClass.getDeclaredConstructor(invokedParamTypes);
+                                                                invokedConstructorsSet.add(constructor);
+                                                            } catch (NoSuchMethodException e) {
+                                                                // Constructor not accessible, skip
+                                                            }
+                                                        } else {
+                                                            try {
+                                                                var invokedMethod = invokedClass.getDeclaredMethod(invokedMethodName, invokedParamTypes);
+                                                                invokedMethodsSet.add(invokedMethod);
+                                                            } catch (NoSuchMethodException e) {
+                                                                // Method not accessible, skip
+                                                            }
+                                                        }
+                                                    }
+                                                } catch (ClassNotFoundException e) {
+                                                    // Class not loadable, skip
+                                                }
+                                            }
+
+                                            // Store the invocation relationships
+                                            if (!invokedMethodsSet.isEmpty()) {
+                                                methodInvocationsMap.put(currentMethod, invokedMethodsSet);
+                                            }
+                                            if (!invokedConstructorsSet.isEmpty()) {
+                                                constructorInvocationsMap.put(currentMethod, invokedConstructorsSet);
+                                            }
+                                        } catch (Exception e) {
+                                            if (exceptionHandler != null) {
+                                                exceptionHandler.test(e);
+                                            }
+                                        }
+                                    };
+                                }
+
+                                @Override
+                                public boolean stop() {
+                                    return false;
+                                }
                             };
                         }
 
@@ -619,15 +719,12 @@ final class HookBuilderImpl implements HookBuilder {
                         public boolean stop() {
                             return false;
                         }
-                    };
+                    });
+                } catch (Throwable ignored) {
                 }
-
-                @Override
-                public boolean stop() {
-                    return false;
-                }
-            }));
+            });
         }
+
         try {
             matchExecutor.joinAll();
         } catch (Throwable e) {
@@ -641,6 +738,27 @@ final class HookBuilderImpl implements HookBuilder {
                     exceptionHandler.test(e);
                 }
             }
+        }
+    }
+
+    /**
+     * Extract parameter types from a ProtoId.
+     * Converts DEX type descriptors to Class objects.
+     */
+    private Class<?>[] getParameterTypesFromProto(DexParser.ProtoId protoId) {
+        try {
+            var paramTypeIds = protoId.getParameters();
+            if (paramTypeIds == null || paramTypeIds.length == 0) {
+                return new Class<?>[0];
+            }
+            var paramTypes = new Class<?>[paramTypeIds.length];
+            for (int i = 0; i < paramTypeIds.length; i++) {
+                var descriptor = paramTypeIds[i].getDescriptor().getString();
+                paramTypes[i] = reflector.loadClass(descriptor);
+            }
+            return paramTypes;
+        } catch (ClassNotFoundException e) {
+            return null;
         }
     }
 
@@ -1612,7 +1730,39 @@ final class HookBuilderImpl implements HookBuilder {
             } else {
                 return false;
             }
-            return this.parameterCount == -1 || this.parameterCount == parameterCount;
+            if (this.parameterCount != -1 && this.parameterCount != parameterCount) {
+                return false;
+            }
+
+            // Check invoked methods constraint
+            if (invokedMethods != null && reflect instanceof Method) {
+                var currentMethod = (Method) reflect;
+                var invokedMethodsSet = methodInvocationsMap.get(currentMethod);
+                if (invokedMethodsSet == null || invokedMethodsSet.isEmpty()) {
+                    return false;
+                }
+
+                // Test if the invoked methods set matches the constraint
+                var hashSet = new HashSet<>(invokedMethodsSet);
+                if (!invokedMethods.test(hashSet)) {
+                    return false;
+                }
+            }
+
+            // Check invoked constructors constraint
+            if (invokedConstructors != null && reflect instanceof Method) {
+                var currentMethod = (Method) reflect;
+                var invokedConstructorsSet = constructorInvocationsMap.get(currentMethod);
+                if (invokedConstructorsSet == null || invokedConstructorsSet.isEmpty()) {
+                    return false;
+                }
+
+                // Test if the invoked constructors set matches the constraint
+                var hashSet = new HashSet<>(invokedConstructorsSet);
+                return invokedConstructors.test(hashSet);
+            }
+
+            return true;
         }
 
         @NonNull
@@ -1816,6 +1966,7 @@ final class HookBuilderImpl implements HookBuilder {
 
         @Override
         protected boolean doMatch(@NonNull Method method) {
+
             if (!super.doMatch(method)) return false;
             if (name != null && !name.test(method.getName())) return false;
             if (returnType == null) return true;
