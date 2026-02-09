@@ -2521,8 +2521,12 @@ final class HookBuilderImpl implements HookBuilder {
     private class ClassLazySequenceImpl extends LazySequenceImpl<ClassLazySequence, ClassMatch, Class<?>, ClassMatcher, ClassMatchImpl, ClassMatcherImpl, DexParser.TypeId> implements ClassLazySequence {
         protected ClassLazySequenceImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
-            if (key != null && matchCache != null) {
-                addObserver((ListObserver<Class<?>>) matches -> matchCache.classListCache.put(key, encodeClasses(matches)));
+            if (matchCache != null) {
+                addObserver((ListObserver<Class<?>>) matches -> {
+                    if (key != null) {
+                        matchCache.classListCache.put(key, encodeClasses(matches));
+                    }
+                });
             }
         }
 
