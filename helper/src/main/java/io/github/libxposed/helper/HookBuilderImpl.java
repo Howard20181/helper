@@ -548,6 +548,7 @@ final class HookBuilderImpl implements HookBuilder {
                         }
                     }
                     buf.put(result);
+                    buf.flip();
                     return ctx.parseDex(buf, true);
                 }));
             }
