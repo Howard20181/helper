@@ -543,8 +543,8 @@ final class HookBuilderImpl implements HookBuilder {
                         } catch (IllegalArgumentException | OutOfMemoryError e) {
                             throw new IOException("read dex failed", e);
                         }
-                        if (result.length == 0) {
-                            throw new IOException("read dex failed");
+                        if (result.length != buf.capacity()) {
+                            throw new IOException("read dex failed: expected " + buf.capacity() + " bytes, got " + result.length);
                         }
                     }
                     buf.put(result);
