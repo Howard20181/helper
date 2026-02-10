@@ -1716,6 +1716,16 @@ final class HookBuilderImpl implements HookBuilder {
             super(rootMatcher, matchFirst);
         }
 
+        @Nullable
+        private Executable asExecutable(@NonNull Reflect reflect) {
+            if (reflect instanceof Method) {
+                return (Method) reflect;
+            } else if (reflect instanceof Constructor) {
+                return (Constructor<?>) reflect;
+            }
+            return null;
+        }
+
         @Override
         protected void setNonPending() {
             super.setNonPending();
@@ -1743,12 +1753,8 @@ final class HookBuilderImpl implements HookBuilder {
 
             // Check invoked methods constraint
             if (invokedMethods != null) {
-                Executable currentExecutable;
-                if (reflect instanceof Method) {
-                    currentExecutable = (Method) reflect;
-                } else if (reflect instanceof Constructor) {
-                    currentExecutable = (Constructor<?>) reflect;
-                } else {
+                Executable currentExecutable = asExecutable(reflect);
+                if (currentExecutable == null) {
                     return false;
                 }
                 var invokedMethodsSet = methodInvocationsMap.get(currentExecutable);
@@ -1765,12 +1771,8 @@ final class HookBuilderImpl implements HookBuilder {
 
             // Check invoked constructors constraint
             if (invokedConstructors != null) {
-                Executable currentExecutable;
-                if (reflect instanceof Method) {
-                    currentExecutable = (Method) reflect;
-                } else if (reflect instanceof Constructor) {
-                    currentExecutable = (Constructor<?>) reflect;
-                } else {
+                Executable currentExecutable = asExecutable(reflect);
+                if (currentExecutable == null) {
                     return false;
                 }
                 var invokedConstructorsSet = constructorInvocationsMap.get(currentExecutable);
