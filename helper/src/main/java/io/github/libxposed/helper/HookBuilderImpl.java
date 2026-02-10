@@ -2637,8 +2637,12 @@ final class HookBuilderImpl implements HookBuilder {
     private final class ParameterLazySequenceImpl extends LazySequenceImpl<ParameterLazySequence, ParameterMatch, Parameter, ParameterMatcher, ParameterMatchImpl, ParameterMatcherImpl, DexParser.TypeId> implements ParameterLazySequence {
         private ParameterLazySequenceImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
-            if (key != null && matchCache != null) {
-                addObserver((ListObserver<Parameter>) matches -> matchCache.parameterListCache.put(key, encodeParameters(matches)));
+            if (matchCache != null) {
+                addObserver((ListObserver<Parameter>) matches -> {
+                    if (key != null) {
+                        matchCache.parameterListCache.put(key, encodeParameters(matches));
+                    }
+                });
             }
         }
 
