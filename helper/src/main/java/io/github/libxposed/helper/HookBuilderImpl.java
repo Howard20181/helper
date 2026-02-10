@@ -83,9 +83,9 @@ final class HookBuilderImpl implements HookBuilder {
     @NonNull
     private final SortedSet<StringMatchImpl> stringMatches = new ConcurrentSkipListSet<>((o1, o2) -> o1.matcher.pattern.compareTo(o2.matcher.pattern));
     @NonNull
-    private final ConcurrentHashMap<Method, Set<Method>> methodInvocationsMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Executable, Set<Method>> methodInvocationsMap = new ConcurrentHashMap<>();
     @NonNull
-    private final ConcurrentHashMap<Method, Set<Constructor<?>>> constructorInvocationsMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Executable, Set<Constructor<?>>> constructorInvocationsMap = new ConcurrentHashMap<>();
     @NonNull
     private final HashMap<LazyBind, AtomicInteger> binds = new HashMap<>();
     @NonNull
@@ -643,15 +643,20 @@ final class HookBuilderImpl implements HookBuilder {
                                         var currentMethodName = currentMethodId.getName().getString();
                                         var currentProto = currentMethodId.getPrototype();
 
-                                        // Try to resolve current method via reflection
-                                        Method currentMethod;
+                                        // Try to resolve current method or constructor via reflection
+                                        Executable currentExecutable;
                                         try {
                                             var currentClass = reflector.loadClass(currentClassName);
                                             var currentParamTypes = getParameterTypesFromProto(currentProto);
                                             if (currentParamTypes == null) {
                                                 return;
                                             }
-                                            currentMethod = currentClass.getDeclaredMethod(currentMethodName, currentParamTypes);
+                                            // Check if it's a constructor
+                                            if ("<init>".equals(currentMethodName)) {
+                                                currentExecutable = currentClass.getDeclaredConstructor(currentParamTypes);
+                                            } else {
+                                                currentExecutable = currentClass.getDeclaredMethod(currentMethodName, currentParamTypes);
+                                            }
                                         } catch (ClassNotFoundException | NoSuchMethodException e) {
                                             return;
                                         }
@@ -699,10 +704,10 @@ final class HookBuilderImpl implements HookBuilder {
 
                                             // Store the invocation relationships
                                             if (!invokedMethodsSet.isEmpty()) {
-                                                methodInvocationsMap.put(currentMethod, invokedMethodsSet);
+                                                methodInvocationsMap.put(currentExecutable, invokedMethodsSet);
                                             }
                                             if (!invokedConstructorsSet.isEmpty()) {
-                                                constructorInvocationsMap.put(currentMethod, invokedConstructorsSet);
+                                                constructorInvocationsMap.put(currentExecutable, invokedConstructorsSet);
                                             }
                                         } catch (Exception e) {
                                             if (exceptionHandler != null) {
@@ -1711,6 +1716,22 @@ final class HookBuilderImpl implements HookBuilder {
             super(rootMatcher, matchFirst);
         }
 
+        /**
+         * Casts the given reflect object to an Executable if it is a Method or Constructor.
+         *
+         * @param reflect the reflection object to cast
+         * @return the reflect object as an Executable, or null if it is neither a Method nor a Constructor
+         */
+        @Nullable
+        private Executable asExecutable(@NonNull Reflect reflect) {
+            if (reflect instanceof Method) {
+                return (Method) reflect;
+            } else if (reflect instanceof Constructor) {
+                return (Constructor<?>) reflect;
+            }
+            return null;
+        }
+
         @Override
         protected void setNonPending() {
             super.setNonPending();
@@ -1736,10 +1757,17 @@ final class HookBuilderImpl implements HookBuilder {
                 return false;
             }
 
+            // Cast once for constraint checking (only needed if constraints are present)
+            // At this point, reflect is guaranteed to be either Method or Constructor
+            // because line 1754 returns false if it's neither
+            Executable currentExecutable = null;
+            if (invokedMethods != null || invokedConstructors != null) {
+                currentExecutable = asExecutable(reflect);
+            }
+
             // Check invoked methods constraint
-            if (invokedMethods != null && reflect instanceof Method) {
-                var currentMethod = (Method) reflect;
-                var invokedMethodsSet = methodInvocationsMap.get(currentMethod);
+            if (invokedMethods != null) {
+                var invokedMethodsSet = methodInvocationsMap.get(currentExecutable);
                 if (invokedMethodsSet == null || invokedMethodsSet.isEmpty()) {
                     return false;
                 }
@@ -1752,9 +1780,8 @@ final class HookBuilderImpl implements HookBuilder {
             }
 
             // Check invoked constructors constraint
-            if (invokedConstructors != null && reflect instanceof Method) {
-                var currentMethod = (Method) reflect;
-                var invokedConstructorsSet = constructorInvocationsMap.get(currentMethod);
+            if (invokedConstructors != null) {
+                var invokedConstructorsSet = constructorInvocationsMap.get(currentExecutable);
                 if (invokedConstructorsSet == null || invokedConstructorsSet.isEmpty()) {
                     return false;
                 }
@@ -3342,7 +3369,7 @@ final class HookBuilderImpl implements HookBuilder {
             dexAnalysis = true;
             final var m = new MethodLazySequenceImpl(rootMatcher);
             addObserver((ItemObserver<Reflect>) result -> {
-                if (result instanceof Method) {
+                if (result instanceof Method || result instanceof Constructor) {
                     var invokedMethodsSet = methodInvocationsMap.get(result);
                     if (invokedMethodsSet != null) {
                         m.match(new ArrayList<>(invokedMethodsSet));
@@ -3363,7 +3390,7 @@ final class HookBuilderImpl implements HookBuilder {
             dexAnalysis = true;
             final var m = new ConstructorLazySequenceImpl(rootMatcher);
             addObserver((ItemObserver<Reflect>) result -> {
-                if (result instanceof Method) {
+                if (result instanceof Method || result instanceof Constructor) {
                     var invokedConstructorsSet = constructorInvocationsMap.get(result);
                     if (invokedConstructorsSet != null) {
                         m.match(new ArrayList<>(invokedConstructorsSet));
