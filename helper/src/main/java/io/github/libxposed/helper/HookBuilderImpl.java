@@ -793,7 +793,8 @@ final class HookBuilderImpl implements HookBuilder {
                             return false;
                         }
                     });
-                } catch (Throwable ignored) {
+                } catch (Throwable e) {
+                    if (exceptionHandler != null) exceptionHandler.test(e);
                 }
             });
         }
