@@ -3372,13 +3372,7 @@ final class HookBuilderImpl implements HookBuilder {
         @Override
         public final FieldLazySequence getAssignedFields() {
             dexAnalysis = true;
-            final var m = new FieldLazySequenceImpl(rootMatcher);
-            addObserver((ItemObserver<Reflect>) result -> {
-                // DEX analysis will populate assigned fields
-                // The actual implementation requires DEX parsing to extract field assignment information
-                m.match(Collections.emptyList());
-            });
-            return m;
+            return null;
         }
 
         @DexAnalysis
@@ -3386,13 +3380,7 @@ final class HookBuilderImpl implements HookBuilder {
         @Override
         public final FieldLazySequence getAccessedFields() {
             dexAnalysis = true;
-            final var m = new FieldLazySequenceImpl(rootMatcher);
-            addObserver((ItemObserver<Reflect>) result -> {
-                // DEX analysis will populate accessed fields
-                // The actual implementation requires DEX parsing to extract field access information
-                m.match(Collections.emptyList());
-            });
-            return m;
+            return null;
         }
 
         @DexAnalysis
