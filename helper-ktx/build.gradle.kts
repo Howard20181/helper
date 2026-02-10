@@ -1,17 +1,15 @@
 plugins {
-    id("com.android.library")
-    id("org.jetbrains.kotlin.android")
+    alias(libs.plugins.android.library)
     id("maven-publish")
     id("signing")
 }
 
 android {
     namespace = "io.github.libxposed.helper.kt"
-    compileSdk = 33
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 21
-        targetSdk = 33
     }
 
     buildFeatures {
@@ -31,15 +29,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
 
-    kotlinOptions {
-        jvmTarget = "11"
-        freeCompilerArgs = listOf(
-            "-Xno-param-assertions",
-            "-Xno-call-assertions",
-            "-Xno-receiver-assertions",
-        )
-    }
-
     publishing {
         singleVariant("release") {
             withSourcesJar()
@@ -49,9 +38,9 @@ android {
 }
 
 dependencies {
-    compileOnly("androidx.annotation:annotation:1.5.0")
-    compileOnly("io.github.libxposed:api:100")
-    implementation(project(":helper"))
+    compileOnly(libs.annotation)
+    compileOnly(libs.api)
+    implementation(projects.helper)
 }
 
 publishing {
@@ -108,6 +97,6 @@ signing {
     val signingPassword = findProperty("signingPassword") as String?
     if (signingKey != null && signingPassword != null) {
         useInMemoryPgpKeys(signingKey, signingPassword)
+        sign(publishing.publications)
     }
-    sign(publishing.publications)
 }

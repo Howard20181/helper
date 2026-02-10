@@ -7,12 +7,14 @@ import androidx.annotation.Nullable;
 
 import java.lang.reflect.Member;
 import java.util.AbstractMap;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.NavigableSet;
 import java.util.Objects;
 import java.util.Queue;
@@ -175,23 +177,51 @@ abstract class SimpleExecutor {
     }
 
     final void joinAll() throws ExecutionException, InterruptedException {
-        while (!allTasks.isEmpty()) {
-            var task = allTasks.poll();
-            if (task != null) task.get();
+        // Keep looping until no new tasks are submitted
+        while (true) {
+            List<Future<?>> tasksToWait = new ArrayList<>();
+            Future<?> task;
+            while ((task = allTasks.poll()) != null) {
+                tasksToWait.add(task);
+            }
+            // If no tasks were found, we're done
+            if (tasksToWait.isEmpty()) {
+                break;
+            }
+            // Wait for all tasks in this batch
+            for (var t : tasksToWait) {
+                t.get();
+            }
+            // Loop again to check if new tasks were submitted during execution
         }
     }
 
     final void joinAll(long timeout, TimeUnit unit) throws ExecutionException, InterruptedException, TimeoutException {
         var nanos = unit.toNanos(timeout);
-        var now = System.nanoTime();
-        while (!allTasks.isEmpty()) {
-            var task = allTasks.poll();
-            var last = now;
-            now = System.nanoTime();
-            nanos -= now - last;
-            if (nanos < 0) throw new TimeoutException();
-            if (task != null)
-                task.get(unit.convert(nanos, TimeUnit.NANOSECONDS), TimeUnit.NANOSECONDS);
+        var startTime = System.nanoTime();
+        
+        // Keep looping until no new tasks are submitted or timeout occurs
+        while (true) {
+            // Snapshot the current tasks to process in this iteration
+            List<Future<?>> tasksToWait = new ArrayList<>();
+            Future<?> task;
+            while ((task = allTasks.poll()) != null) {
+                tasksToWait.add(task);
+            }
+            
+            // If no tasks were found, we're done
+            if (tasksToWait.isEmpty()) {
+                break;
+            }
+            
+            // Wait for all tasks in this batch
+            for (var t : tasksToWait) {
+                var elapsed = System.nanoTime() - startTime;
+                var remaining = nanos - elapsed;
+                if (remaining < 0) throw new TimeoutException();
+                t.get(remaining, TimeUnit.NANOSECONDS);
+            }
+            // Loop again to check if new tasks were submitted during execution
         }
     }
 }
@@ -233,6 +263,100 @@ final class MatchCache {
     ConcurrentHashMap<String, String> constructorCache = new ConcurrentHashMap<>();
     @NonNull
     ConcurrentHashMap<String, AbstractMap.SimpleEntry<Integer, String>> parameterCache = new ConcurrentHashMap<>();
+
+    /**
+     * Convert a Class to its Smali-style descriptor.
+     * <p>
+     * Primitives: int ({@code I}), boolean ({@code Z}), float ({@code F}), long ({@code J}),
+     * short ({@code S}), byte ({@code B}), double ({@code D}), char ({@code C}), void ({@code V})
+     * <p>
+     * Objects: java.lang.String ({@code Ljava/lang/String;})
+     * <p>
+     * Arrays: String[] ({@code [Ljava/lang/String;}), int[] ({@code [I})
+     *
+     * @param clazz the class to convert
+     * @return the Smali-style descriptor for the class
+     */
+    @NonNull
+    private static String classToDescriptor(@NonNull Class<?> clazz) {
+        if (clazz.isPrimitive()) {
+            if (clazz == int.class) return "I";
+            if (clazz == boolean.class) return "Z";
+            if (clazz == float.class) return "F";
+            if (clazz == long.class) return "J";
+            if (clazz == short.class) return "S";
+            if (clazz == byte.class) return "B";
+            if (clazz == double.class) return "D";
+            if (clazz == char.class) return "C";
+            if (clazz == void.class) return "V";
+            // Fallback for unknown primitive types (should never happen in standard Java)
+            throw new IllegalArgumentException("Unknown primitive type encountered: " + clazz.getName() + ". Please report this issue.");
+        }
+        String name = clazz.getName();
+        if (name.startsWith("[")) {
+            // Array type - getName() returns descriptor format but uses dots for object arrays
+            // (e.g., [Ljava.lang.String;). Replace dots with slashes for consistency.
+            return name.replace('.', '/');
+        }
+        // Object type - convert to Lpackage/Class; format
+        return "L" + name.replace('.', '/') + ";";
+    }
+
+    /**
+     * Encode a Class to its fully qualified class name for caching.
+     * Returns empty string if class is null.
+     *
+     * @param clazz the class to encode
+     * @return the fully qualified class name, or empty string if null
+     */
+    @NonNull
+    static String encodeClass(@Nullable Class<?> clazz) {
+        if (clazz == null) return "";
+        return clazz.getName();
+    }
+
+    /**
+     * Encode a Field to its string representation for caching.
+     * Format: declaringClass->fieldName:fieldType
+     * Returns empty string if field is null.
+     */
+    @NonNull
+    static String encodeField(@Nullable java.lang.reflect.Field field) {
+        if (field == null) return "";
+        return field.getDeclaringClass().getName() + "->" + field.getName() + ":" + classToDescriptor(field.getType());
+    }
+
+    /**
+     * Encode a Method to its string representation for caching.
+     * Format: declaringClass->methodName(param1,param2,...)returnType
+     * Returns empty string if method is null.
+     */
+    @NonNull
+    static String encodeMethod(@Nullable java.lang.reflect.Method method) {
+        if (method == null) return "";
+        var params = new StringBuilder();
+        var parameterTypes = method.getParameterTypes();
+        for (var parameterType : parameterTypes) {
+            params.append(classToDescriptor(parameterType));
+        }
+        return method.getDeclaringClass().getName() + "->" + method.getName() + "(" + params + ")" + classToDescriptor(method.getReturnType());
+    }
+
+    /**
+     * Encode a Constructor to its string representation for caching.
+     * Format: declaringClass-><init>(param1,param2,...)V
+     * Returns empty string if constructor is null.
+     */
+    @NonNull
+    static String encodeConstructor(@Nullable java.lang.reflect.Constructor<?> constructor) {
+        if (constructor == null) return "";
+        var params = new StringBuilder();
+        var parameterTypes = constructor.getParameterTypes();
+        for (var parameterType : parameterTypes) {
+            params.append(classToDescriptor(parameterType));
+        }
+        return constructor.getDeclaringClass().getName() + "-><init>(" + params + ")V";
+    }
 }
 
 final class TreeSetView<T extends Comparable<T>> implements Set<T>, SortedSet<T>, NavigableSet<T> {

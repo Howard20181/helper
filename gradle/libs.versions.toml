@@ -1,0 +1,13 @@
+[versions]
+annotation = "1.9.1"
+annotationExperimental = "1.5.1"
+api = "100"
+
+[libraries]
+annotation = { module = "androidx.annotation:annotation", version.ref = "annotation" }
+annotation-experimental = { module = "androidx.annotation:annotation-experimental", version.ref = "annotationExperimental" }
+api = { module = "io.github.libxposed:api", version.ref = "api" }
+
+[plugins]
+android-library = { id = "com.android.library", version = "9.0.0" }
+android-application = { id = "com.android.application", version = "9.0.0" }

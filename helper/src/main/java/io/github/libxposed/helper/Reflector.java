@@ -32,6 +32,22 @@ final class Reflector {
     @NonNull
     Class<?> loadClass(@NonNull String className) throws ClassNotFoundException {
         className = className.trim().replace('/', '.');
+        // Handle single-letter primitive descriptors
+        if (className.length() == 1) {
+            Class<?> primitiveClass = primitiveClassMap.get(className.charAt(0));
+            if (primitiveClass != null) {
+                return primitiveClass;
+            }
+        }
+        // Handle primitive type names (e.g., "int", "boolean", "void")
+        // abbreviationMap maps primitive names to their single-letter descriptors
+        Character primitiveDescriptor = abbreviationMap.get(className);
+        if (primitiveDescriptor != null && primitiveClassMap.containsKey(primitiveDescriptor)) {
+            var primitiveClass = primitiveClassMap.get(primitiveDescriptor);
+            if (primitiveClass != null) {
+                return primitiveClass;
+            }
+        }
         if (className.startsWith("L") && className.endsWith(";")) {
             className = className.substring(1, className.length() - 1);
         } else if (className.endsWith("[]")) {

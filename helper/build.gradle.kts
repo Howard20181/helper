@@ -1,17 +1,15 @@
 plugins {
-    id("com.android.library")
+    alias(libs.plugins.android.library)
     id("maven-publish")
     id("signing")
 }
 
 android {
     namespace = "io.github.libxposed.helper"
-    compileSdk = 33
-    buildToolsVersion = "33.0.2"
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 21
-        targetSdk = 33
     }
 
     buildFeatures {
@@ -37,6 +35,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+    enableKotlin = false
 }
 
 publishing {
@@ -89,7 +88,7 @@ publishing {
 }
 
 dependencies {
-    compileOnly("androidx.annotation:annotation-experimental:1.3.0")
-    compileOnly("androidx.annotation:annotation:1.5.0")
-    compileOnly("io.github.libxposed:api:100")
+    compileOnly(libs.annotation.experimental)
+    compileOnly(libs.annotation)
+    compileOnly(libs.api)
 }
