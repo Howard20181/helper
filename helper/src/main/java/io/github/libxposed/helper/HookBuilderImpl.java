@@ -655,7 +655,10 @@ final class HookBuilderImpl implements HookBuilder {
                                             if ("<init>".equals(currentMethodName)) {
                                                 currentExecutable = currentClass.getDeclaredConstructor(currentParamTypes);
                                             } else {
-                                                currentExecutable = currentClass.getDeclaredMethod(currentMethodName, currentParamTypes);
+                                                currentExecutable = findMethod(currentClass, currentMethodName, currentParamTypes);
+                                                if (currentExecutable == null) {
+                                                    return;
+                                                }
                                             }
                                         } catch (ClassNotFoundException | NoSuchMethodException e) {
                                             return;
@@ -689,11 +692,9 @@ final class HookBuilderImpl implements HookBuilder {
                                                                 // Constructor not accessible, skip
                                                             }
                                                         } else {
-                                                            try {
-                                                                var invokedMethod = invokedClass.getDeclaredMethod(invokedMethodName, invokedParamTypes);
+                                                            var invokedMethod = findMethod(invokedClass, invokedMethodName, invokedParamTypes);
+                                                            if (invokedMethod != null) {
                                                                 invokedMethodsSet.add(invokedMethod);
-                                                            } catch (NoSuchMethodException e) {
-                                                                // Method not accessible, skip
                                                             }
                                                         }
                                                     }
@@ -769,6 +770,38 @@ final class HookBuilderImpl implements HookBuilder {
         } catch (ClassNotFoundException e) {
             return null;
         }
+    }
+
+    /**
+     * Finds a method in a class or its superclasses/interfaces.
+     * First tries getMethod() for public methods (which includes inherited ones),
+     * then walks the class hierarchy for non-public methods.
+     *
+     * @param clazz The class to search in
+     * @param methodName The name of the method
+     * @param parameterTypes The parameter types of the method
+     * @return The found method, or null if not found
+     */
+    private Method findMethod(Class<?> clazz, String methodName, Class<?>[] parameterTypes) {
+        // Try public methods first (includes inherited public methods)
+        try {
+            return clazz.getMethod(methodName, parameterTypes);
+        } catch (NoSuchMethodException e) {
+            // Not a public method, walk the hierarchy
+        }
+
+        // Walk the class hierarchy for non-public methods
+        Class<?> current = clazz;
+        while (current != null) {
+            try {
+                return current.getDeclaredMethod(methodName, parameterTypes);
+            } catch (NoSuchMethodException e) {
+                // Try superclass
+                current = current.getSuperclass();
+            }
+        }
+
+        return null;
     }
 
     private TreeSetView<String> getAllClassNamesFromClassLoader() throws NoSuchFieldException, IllegalAccessException {
