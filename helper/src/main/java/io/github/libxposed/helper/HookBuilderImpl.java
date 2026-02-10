@@ -660,7 +660,10 @@ final class HookBuilderImpl implements HookBuilder {
                                                     return;
                                                 }
                                             }
-                                        } catch (ClassNotFoundException | NoSuchMethodException e) {
+                                        } catch (ClassNotFoundException e) {
+                                            return;
+                                        } catch (NoSuchMethodException e) {
+                                            // Only thrown by getDeclaredConstructor for constructors
                                             return;
                                         }
 
