@@ -306,8 +306,8 @@ final class MatchCache {
         if (method == null) return "";
         var params = new StringBuilder();
         var parameterTypes = method.getParameterTypes();
-        for (int i = 0; i < parameterTypes.length; i++) {
-            params.append(classToDescriptor(parameterTypes[i]));
+        for (var parameterType : parameterTypes) {
+            params.append(classToDescriptor(parameterType));
         }
         return method.getDeclaringClass().getName() + "->" + method.getName() + "(" + params + ")" + classToDescriptor(method.getReturnType());
     }
@@ -322,8 +322,8 @@ final class MatchCache {
         if (constructor == null) return "";
         var params = new StringBuilder();
         var parameterTypes = constructor.getParameterTypes();
-        for (int i = 0; i < parameterTypes.length; i++) {
-            params.append(classToDescriptor(parameterTypes[i]));
+        for (var parameterType : parameterTypes) {
+            params.append(classToDescriptor(parameterType));
         }
         return constructor.getDeclaringClass().getName() + "-><init>(" + params + ")V";
     }

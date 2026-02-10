@@ -42,8 +42,11 @@ final class Reflector {
         // Handle primitive type names (e.g., "int", "boolean", "void")
         // abbreviationMap maps primitive names to their single-letter descriptors
         Character primitiveDescriptor = abbreviationMap.get(className);
-        if (primitiveDescriptor != null) {
-            return primitiveClassMap.get(primitiveDescriptor);
+        if (primitiveDescriptor != null && primitiveClassMap.containsKey(primitiveDescriptor)) {
+            var primitiveClass = primitiveClassMap.get(primitiveDescriptor);
+            if (primitiveClass != null) {
+                return primitiveClass;
+            }
         }
         if (className.startsWith("L") && className.endsWith(";")) {
             className = className.substring(1, className.length() - 1);

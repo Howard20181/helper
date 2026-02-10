@@ -83,13 +83,13 @@ final class HookBuilderImpl implements HookBuilder {
     @NonNull
     private final SortedSet<StringMatchImpl> stringMatches = new ConcurrentSkipListSet<>((o1, o2) -> o1.matcher.pattern.compareTo(o2.matcher.pattern));
     @NonNull
-    private final ConcurrentHashMap<Executable, Set<Method>> methodInvocationsMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Member, Set<Method>> methodInvocationsMap = new ConcurrentHashMap<>();
     @NonNull
-    private final ConcurrentHashMap<Executable, Set<Constructor<?>>> constructorInvocationsMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Member, Set<Constructor<?>>> constructorInvocationsMap = new ConcurrentHashMap<>();
     @NonNull
-    private final ConcurrentHashMap<Executable, Set<Field>> assignedFieldsMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Member, Set<Field>> assignedFieldsMap = new ConcurrentHashMap<>();
     @NonNull
-    private final ConcurrentHashMap<Executable, Set<Field>> accessedFieldsMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Member, Set<Field>> accessedFieldsMap = new ConcurrentHashMap<>();
     @NonNull
     private final HashMap<LazyBind, AtomicInteger> binds = new HashMap<>();
     @NonNull
@@ -650,7 +650,7 @@ final class HookBuilderImpl implements HookBuilder {
                                         var currentProto = currentMethodId.getPrototype();
 
                                         // Try to resolve current method or constructor via reflection
-                                        Executable currentExecutable;
+                                        Member currentExecutable;
                                         try {
                                             var currentClass = reflector.loadClass(currentClassName);
                                             var currentParamTypes = getParameterTypesFromProto(currentProto);
@@ -1841,22 +1841,6 @@ final class HookBuilderImpl implements HookBuilder {
             super(rootMatcher, matchFirst);
         }
 
-        /**
-         * Casts the given reflect object to an Executable if it is a Method or Constructor.
-         *
-         * @param reflect the reflection object to cast
-         * @return the reflect object as an Executable, or null if it is neither a Method nor a Constructor
-         */
-        @Nullable
-        private Executable asExecutable(@NonNull Reflect reflect) {
-            if (reflect instanceof Method) {
-                return (Method) reflect;
-            } else if (reflect instanceof Constructor) {
-                return (Constructor<?>) reflect;
-            }
-            return null;
-        }
-
         @Override
         protected void setNonPending() {
             super.setNonPending();
@@ -1882,12 +1866,12 @@ final class HookBuilderImpl implements HookBuilder {
                 return false;
             }
 
-            // Cast once for constraint checking (only needed if constraints are present)
-            // At this point, reflect is guaranteed to be either Method or Constructor
-            // because line 1754 returns false if it's neither
-            Executable currentExecutable = null;
-            if (invokedMethods != null || invokedConstructors != null) {
-                currentExecutable = asExecutable(reflect);
+            // Use reflect as Member for constraint checking (only needed if constraints are present)
+            // At this point, reflect is guaranteed to be either Method or Constructor, both implement Member
+            Member currentExecutable = null;
+            if (invokedMethods != null || invokedConstructors != null || assignedFields != null || accessedFields != null) {
+                // Since Reflect extends Member, and reflect is guaranteed to be Method or Constructor at this point
+                currentExecutable = reflect;
             }
 
             // Check invoked methods constraint
@@ -1913,7 +1897,35 @@ final class HookBuilderImpl implements HookBuilder {
 
                 // Test if the invoked constructors set matches the constraint
                 var hashSet = new HashSet<>(invokedConstructorsSet);
-                return invokedConstructors.test(hashSet);
+                if (!invokedConstructors.test(hashSet)) {
+                    return false;
+                }
+            }
+
+            // Check assigned fields constraint
+            if (assignedFields != null) {
+                var assignedFieldsSet = assignedFieldsMap.get(currentExecutable);
+                if (assignedFieldsSet == null || assignedFieldsSet.isEmpty()) {
+                    return false;
+                }
+
+                // Test if the assigned fields set matches the constraint
+                var hashSet = new HashSet<>(assignedFieldsSet);
+                if (!assignedFields.test(hashSet)) {
+                    return false;
+                }
+            }
+
+            // Check accessed fields constraint
+            if (accessedFields != null) {
+                var accessedFieldsSet = accessedFieldsMap.get(currentExecutable);
+                if (accessedFieldsSet == null || accessedFieldsSet.isEmpty()) {
+                    return false;
+                }
+
+                // Test if the accessed fields set matches the constraint
+                var hashSet = new HashSet<>(accessedFieldsSet);
+                return accessedFields.test(hashSet);
             }
 
             return true;
