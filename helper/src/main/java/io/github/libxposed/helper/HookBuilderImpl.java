@@ -1025,19 +1025,25 @@ final class HookBuilderImpl implements HookBuilder {
             if (hit == null) continue;
             try {
                 var cache = e.getValue();
-                var methodName = cache.getValue();
+                var executableSignature = cache.getValue();
                 var idx = cache.getKey();
-                if (methodName.isEmpty()) {
+                if (executableSignature.isEmpty()) {
                     hit.match(null);
                     continue;
                 }
-                var m = reflector.loadMethod(methodName);
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                    var p = m.getParameters()[idx];
-                    hit.match(new ParameterImpl(idx, p.getType(), m, p.getModifiers()));
+                // Detect if this is a constructor signature (contains -><init>(
+                java.lang.reflect.Executable executable;
+                if (executableSignature.contains("-><init>(")) {
+                    executable = reflector.loadConstructor(executableSignature);
                 } else {
-                    var p = m.getParameterTypes()[idx];
-                    hit.match(new ParameterImpl(idx, p, m, 0));
+                    executable = reflector.loadMethod(executableSignature);
+                }
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    var p = executable.getParameters()[idx];
+                    hit.match(new ParameterImpl(idx, p.getType(), executable, p.getModifiers()));
+                } else {
+                    var p = executable.getParameterTypes()[idx];
+                    hit.match(new ParameterImpl(idx, p, executable, 0));
                 }
             } catch (Throwable ex) {
                 hit.match(null);
