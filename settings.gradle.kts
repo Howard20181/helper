@@ -1,12 +1,9 @@
+enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 pluginManagement {
     repositories {
         gradlePluginPortal()
         google()
         mavenCentral()
-    }
-    plugins {
-        id("com.android.library") version "8.5.2"
-        id("org.jetbrains.kotlin.android") version "1.9.24"
     }
 }
 
@@ -18,6 +15,9 @@ dependencyResolutionManagement {
         mavenCentral()
         mavenLocal()
     }
+    versionCatalogs {
+        create("libs")
+    }
 }
-rootProject.name = "helper"
+rootProject.name = "libxposed-helper"
 include(":helper", ":helper-ktx")
