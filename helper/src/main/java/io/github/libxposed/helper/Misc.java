@@ -235,6 +235,34 @@ final class MatchCache {
     ConcurrentHashMap<String, AbstractMap.SimpleEntry<Integer, String>> parameterCache = new ConcurrentHashMap<>();
 
     /**
+     * Convert a Class to its Smali-style descriptor.
+     * Primitives: I, Z, F, J, S, B, D, C, V
+     * Objects: Ljava/lang/String;
+     * Arrays: [Ljava/lang/String; or [I
+     */
+    @NonNull
+    private static String classToDescriptor(@NonNull Class<?> clazz) {
+        if (clazz.isPrimitive()) {
+            if (clazz == int.class) return "I";
+            if (clazz == boolean.class) return "Z";
+            if (clazz == float.class) return "F";
+            if (clazz == long.class) return "J";
+            if (clazz == short.class) return "S";
+            if (clazz == byte.class) return "B";
+            if (clazz == double.class) return "D";
+            if (clazz == char.class) return "C";
+            if (clazz == void.class) return "V";
+        }
+        String name = clazz.getName();
+        if (name.startsWith("[")) {
+            // Array type - getName() already returns the correct descriptor format
+            return name.replace('.', '/');
+        }
+        // Object type - convert to Lpackage/Class; format
+        return "L" + name.replace('.', '/') + ";";
+    }
+
+    /**
      * Encode a Class to its string representation for caching.
      * Returns empty string if class is null.
      */
@@ -252,7 +280,7 @@ final class MatchCache {
     @NonNull
     static String encodeField(@Nullable java.lang.reflect.Field field) {
         if (field == null) return "";
-        return field.getDeclaringClass().getName() + "->" + field.getName() + ":" + field.getType().getName();
+        return field.getDeclaringClass().getName() + "->" + field.getName() + ":" + classToDescriptor(field.getType());
     }
 
     /**
@@ -266,10 +294,9 @@ final class MatchCache {
         var params = new StringBuilder();
         var parameterTypes = method.getParameterTypes();
         for (int i = 0; i < parameterTypes.length; i++) {
-            if (i > 0) params.append(",");
-            params.append(parameterTypes[i].getName());
+            params.append(classToDescriptor(parameterTypes[i]));
         }
-        return method.getDeclaringClass().getName() + "->" + method.getName() + "(" + params + ")" + method.getReturnType().getName();
+        return method.getDeclaringClass().getName() + "->" + method.getName() + "(" + params + ")" + classToDescriptor(method.getReturnType());
     }
 
     /**
@@ -283,8 +310,7 @@ final class MatchCache {
         var params = new StringBuilder();
         var parameterTypes = constructor.getParameterTypes();
         for (int i = 0; i < parameterTypes.length; i++) {
-            if (i > 0) params.append(",");
-            params.append(parameterTypes[i].getName());
+            params.append(classToDescriptor(parameterTypes[i]));
         }
         return constructor.getDeclaringClass().getName() + "-><init>(" + params + ")V";
     }
