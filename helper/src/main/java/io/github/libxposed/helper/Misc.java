@@ -236,9 +236,16 @@ final class MatchCache {
 
     /**
      * Convert a Class to its Smali-style descriptor.
-     * Primitives: I (int), Z (boolean), F (float), J (long), S (short), B (byte), D (double), C (char), V (void)
-     * Objects: Ljava/lang/String;
-     * Arrays: [Ljava/lang/String; or [I
+     * <p>
+     * Primitives: {@code I} (int), {@code Z} (boolean), {@code F} (float), {@code J} (long), 
+     * {@code S} (short), {@code B} (byte), {@code D} (double), {@code C} (char), {@code V} (void)
+     * <p>
+     * Objects: {@code Ljava/lang/String;}
+     * <p>
+     * Arrays: {@code [Ljava/lang/String;} or {@code [I}
+     *
+     * @param clazz the class to convert
+     * @return the Smali-style descriptor for the class
      */
     @NonNull
     private static String classToDescriptor(@NonNull Class<?> clazz) {
@@ -253,7 +260,7 @@ final class MatchCache {
             if (clazz == char.class) return "C";
             if (clazz == void.class) return "V";
             // Fallback for unknown primitive types (should never happen)
-            throw new IllegalArgumentException("Unexpected primitive type encountered in classToDescriptor: " + clazz.getName() + ". Expected one of: int, boolean, float, long, short, byte, double, char, void");
+            throw new IllegalArgumentException("Unknown primitive type: " + clazz.getName());
         }
         String name = clazz.getName();
         if (name.startsWith("[")) {
