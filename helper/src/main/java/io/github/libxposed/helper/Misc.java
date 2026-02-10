@@ -236,7 +236,7 @@ final class MatchCache {
 
     /**
      * Convert a Class to its Smali-style descriptor.
-     * Primitives: I, Z, F, J, S, B, D, C, V
+     * Primitives: I (int), Z (boolean), F (float), J (long), S (short), B (byte), D (double), C (char), V (void)
      * Objects: Ljava/lang/String;
      * Arrays: [Ljava/lang/String; or [I
      */
@@ -253,7 +253,8 @@ final class MatchCache {
             if (clazz == char.class) return "C";
             if (clazz == void.class) return "V";
             // Fallback for unknown primitive types (should never happen)
-            throw new IllegalArgumentException("Unknown primitive type: " + clazz.getName());
+            throw new IllegalArgumentException("Unexpected primitive type encountered in classToDescriptor: " + 
+                clazz.getName() + ". Expected one of: int, boolean, float, long, short, byte, double, char, void");
         }
         String name = clazz.getName();
         if (name.startsWith("[")) {
