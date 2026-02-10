@@ -808,23 +808,21 @@ final class HookBuilderImpl implements HookBuilder {
         matchCache = new MatchCache();
         try {
             if (cacheInputStream != null) {
-                // Check if stream has available data before creating ObjectInputStream
-                // to avoid EOFException when cache file is empty
-                if (cacheInputStream.available() > 0) {
-                    try (var in = new ObjectInputStream(cacheInputStream)) {
-                        matchCache.cacheInfo = (HashMap<String, Object>) in.readObject();
-                        matchCache.classListCache = (ConcurrentHashMap<String, HashSet<String>>) in.readObject();
-                        matchCache.methodListCache = (ConcurrentHashMap<String, HashSet<String>>) in.readObject();
-                        matchCache.fieldListCache = (ConcurrentHashMap<String, HashSet<String>>) in.readObject();
-                        matchCache.constructorListCache = (ConcurrentHashMap<String, HashSet<String>>) in.readObject();
-                        matchCache.parameterListCache = (ConcurrentHashMap<String, HashSet<AbstractMap.SimpleEntry<Integer, String>>>) in.readObject();
+                // Attempt to read from ObjectInputStream directly
+                // EOFException or other exceptions indicate empty/corrupt cache
+                try (var in = new ObjectInputStream(cacheInputStream)) {
+                    matchCache.cacheInfo = (HashMap<String, Object>) in.readObject();
+                    matchCache.classListCache = (ConcurrentHashMap<String, HashSet<String>>) in.readObject();
+                    matchCache.methodListCache = (ConcurrentHashMap<String, HashSet<String>>) in.readObject();
+                    matchCache.fieldListCache = (ConcurrentHashMap<String, HashSet<String>>) in.readObject();
+                    matchCache.constructorListCache = (ConcurrentHashMap<String, HashSet<String>>) in.readObject();
+                    matchCache.parameterListCache = (ConcurrentHashMap<String, HashSet<AbstractMap.SimpleEntry<Integer, String>>>) in.readObject();
 
-                        matchCache.classCache = (ConcurrentHashMap<String, String>) in.readObject();
-                        matchCache.methodCache = (ConcurrentHashMap<String, String>) in.readObject();
-                        matchCache.fieldCache = (ConcurrentHashMap<String, String>) in.readObject();
-                        matchCache.constructorCache = (ConcurrentHashMap<String, String>) in.readObject();
-                        matchCache.parameterCache = (ConcurrentHashMap<String, AbstractMap.SimpleEntry<Integer, String>>) in.readObject();
-                    }
+                    matchCache.classCache = (ConcurrentHashMap<String, String>) in.readObject();
+                    matchCache.methodCache = (ConcurrentHashMap<String, String>) in.readObject();
+                    matchCache.fieldCache = (ConcurrentHashMap<String, String>) in.readObject();
+                    matchCache.constructorCache = (ConcurrentHashMap<String, String>) in.readObject();
+                    matchCache.parameterCache = (ConcurrentHashMap<String, AbstractMap.SimpleEntry<Integer, String>>) in.readObject();
                 }
             }
             if (cacheChecker != null) {
