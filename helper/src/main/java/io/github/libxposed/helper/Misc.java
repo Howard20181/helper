@@ -253,8 +253,7 @@ final class MatchCache {
             if (clazz == char.class) return "C";
             if (clazz == void.class) return "V";
             // Fallback for unknown primitive types (should never happen)
-            throw new IllegalArgumentException("Unexpected primitive type encountered in classToDescriptor: " + 
-                clazz.getName() + ". Expected one of: int, boolean, float, long, short, byte, double, char, void");
+            throw new IllegalArgumentException("Unexpected primitive type encountered in classToDescriptor: " + clazz.getName() + ". Expected one of: int, boolean, float, long, short, byte, double, char, void");
         }
         String name = clazz.getName();
         if (name.startsWith("[")) {
