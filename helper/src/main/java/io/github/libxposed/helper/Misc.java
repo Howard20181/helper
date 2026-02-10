@@ -237,12 +237,13 @@ final class MatchCache {
     /**
      * Convert a Class to its Smali-style descriptor.
      * <p>
-     * Primitives: {@code I} (int), {@code Z} (boolean), {@code F} (float), {@code J} (long), 
-     * {@code S} (short), {@code B} (byte), {@code D} (double), {@code C} (char), {@code V} (void)
+     * Primitives: {@code int} → {@code I}, {@code boolean} → {@code Z}, {@code float} → {@code F}, 
+     * {@code long} → {@code J}, {@code short} → {@code S}, {@code byte} → {@code B}, 
+     * {@code double} → {@code D}, {@code char} → {@code C}, {@code void} → {@code V}
      * <p>
-     * Objects: {@code Ljava/lang/String;}
+     * Objects: {@code java.lang.String} → {@code Ljava/lang/String;}
      * <p>
-     * Arrays: {@code [Ljava/lang/String;} or {@code [I}
+     * Arrays: {@code String[]} → {@code [Ljava/lang/String;}, {@code int[]} → {@code [I}
      *
      * @param clazz the class to convert
      * @return the Smali-style descriptor for the class
@@ -260,7 +261,7 @@ final class MatchCache {
             if (clazz == char.class) return "C";
             if (clazz == void.class) return "V";
             // Fallback for unknown primitive types (should never happen)
-            throw new IllegalArgumentException("Unknown primitive type: " + clazz.getName());
+            throw new IllegalArgumentException("Failed to convert primitive type to descriptor: " + clazz.getName() + ". This is likely a bug in classToDescriptor().");
         }
         String name = clazz.getName();
         if (name.startsWith("[")) {
@@ -272,8 +273,11 @@ final class MatchCache {
     }
 
     /**
-     * Encode a Class to its string representation for caching.
+     * Encode a Class to its fully qualified class name for caching.
      * Returns empty string if class is null.
+     *
+     * @param clazz the class to encode
+     * @return the fully qualified class name, or empty string if null
      */
     @NonNull
     static String encodeClass(@Nullable Class<?> clazz) {
