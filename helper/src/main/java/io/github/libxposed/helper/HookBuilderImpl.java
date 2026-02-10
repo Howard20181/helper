@@ -3342,9 +3342,16 @@ final class HookBuilderImpl implements HookBuilder {
             dexAnalysis = true;
             final var m = new MethodLazySequenceImpl(rootMatcher);
             addObserver((ItemObserver<Reflect>) result -> {
-                // DEX analysis will populate invoked methods
-                // The actual implementation requires DEX parsing to extract method invocation information
-                m.match(Collections.emptyList());
+                if (result instanceof Method) {
+                    var invokedMethodsSet = methodInvocationsMap.get(result);
+                    if (invokedMethodsSet != null) {
+                        m.match(new ArrayList<>(invokedMethodsSet));
+                    } else {
+                        m.match(Collections.emptyList());
+                    }
+                } else {
+                    m.match(Collections.emptyList());
+                }
             });
             return m;
         }
@@ -3356,9 +3363,16 @@ final class HookBuilderImpl implements HookBuilder {
             dexAnalysis = true;
             final var m = new ConstructorLazySequenceImpl(rootMatcher);
             addObserver((ItemObserver<Reflect>) result -> {
-                // DEX analysis will populate invoked constructors
-                // The actual implementation requires DEX parsing to extract constructor invocation information
-                m.match(Collections.emptyList());
+                if (result instanceof Method) {
+                    var invokedConstructorsSet = constructorInvocationsMap.get(result);
+                    if (invokedConstructorsSet != null) {
+                        m.match(new ArrayList<>(invokedConstructorsSet));
+                    } else {
+                        m.match(Collections.emptyList());
+                    }
+                } else {
+                    m.match(Collections.emptyList());
+                }
             });
             return m;
         }
