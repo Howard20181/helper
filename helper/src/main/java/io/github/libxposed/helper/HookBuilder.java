@@ -307,6 +307,10 @@ public interface HookBuilder {
      * <p>This enables persistent caching of DEX analysis results across sessions,
      * significantly improving startup time for complex matching operations.
      *
+     * <p><b>Note:</b> The builder takes ownership of the provided stream and will
+     * automatically close it after reading the cache data. Callers should not close
+     * the stream themselves.
+     *
      * @param cacheInputStream the input stream to read cache data from
      * @return this builder for method chaining
      */
@@ -318,6 +322,10 @@ public interface HookBuilder {
      *
      * <p>The analysis cache will be written to this stream when hook building completes,
      * allowing it to be reused in future sessions.
+     *
+     * <p><b>Note:</b> The builder takes ownership of the provided stream and will
+     * automatically close it after writing the cache data. Callers should not close
+     * the stream themselves.
      *
      * @param cacheOutputStream the output stream to write cache data to
      * @return this builder for method chaining
