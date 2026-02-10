@@ -237,13 +237,12 @@ final class MatchCache {
     /**
      * Convert a Class to its Smali-style descriptor.
      * <p>
-     * Primitives: {@code int} → {@code I}, {@code boolean} → {@code Z}, {@code float} → {@code F}, 
-     * {@code long} → {@code J}, {@code short} → {@code S}, {@code byte} → {@code B}, 
-     * {@code double} → {@code D}, {@code char} → {@code C}, {@code void} → {@code V}
+     * Primitives: int ({@code I}), boolean ({@code Z}), float ({@code F}), long ({@code J}), 
+     * short ({@code S}), byte ({@code B}), double ({@code D}), char ({@code C}), void ({@code V})
      * <p>
-     * Objects: {@code java.lang.String} → {@code Ljava/lang/String;}
+     * Objects: java.lang.String ({@code Ljava/lang/String;})
      * <p>
-     * Arrays: {@code String[]} → {@code [Ljava/lang/String;}, {@code int[]} → {@code [I}
+     * Arrays: String[] ({@code [Ljava/lang/String;}), int[] ({@code [I})
      *
      * @param clazz the class to convert
      * @return the Smali-style descriptor for the class
