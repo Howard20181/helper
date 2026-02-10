@@ -557,7 +557,9 @@ final class HookBuilderImpl implements HookBuilder {
                 parsers[i] = tasks.get(i).get();
             }
         } catch (Throwable e) {
-            exceptionHandler.test(e);
+            if (exceptionHandler != null) {
+                exceptionHandler.test(e);
+            }
             return;
         }
 
