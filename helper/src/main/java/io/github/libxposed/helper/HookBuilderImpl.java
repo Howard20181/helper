@@ -2905,8 +2905,12 @@ final class HookBuilderImpl implements HookBuilder {
     private final class ConstructorLazySequenceImpl extends ExecutableLazySequenceImpl<ConstructorLazySequence, ConstructorMatch, Constructor<?>, ConstructorMatcher, ConstructorMatchImpl, ConstructorMatcherImpl> implements ConstructorLazySequence {
         private ConstructorLazySequenceImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
-            if (key != null && matchCache != null) {
-                addObserver((ListObserver<Constructor<?>>) matches -> matchCache.constructorListCache.put(key, encodeConstructors(matches)));
+            if (matchCache != null) {
+                addObserver((ListObserver<Constructor<?>>) matches -> {
+                    if (key != null) {
+                        matchCache.constructorListCache.put(key, encodeConstructors(matches));
+                    }
+                });
             }
         }
 
