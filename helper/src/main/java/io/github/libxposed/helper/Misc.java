@@ -235,8 +235,49 @@ final class MatchCache {
     ConcurrentHashMap<String, AbstractMap.SimpleEntry<Integer, String>> parameterCache = new ConcurrentHashMap<>();
 
     /**
-     * Encode a Class to its string representation for caching.
+     * Convert a Class to its Smali-style descriptor.
+     * <p>
+     * Primitives: int ({@code I}), boolean ({@code Z}), float ({@code F}), long ({@code J}), 
+     * short ({@code S}), byte ({@code B}), double ({@code D}), char ({@code C}), void ({@code V})
+     * <p>
+     * Objects: java.lang.String ({@code Ljava/lang/String;})
+     * <p>
+     * Arrays: String[] ({@code [Ljava/lang/String;}), int[] ({@code [I})
+     *
+     * @param clazz the class to convert
+     * @return the Smali-style descriptor for the class
+     */
+    @NonNull
+    private static String classToDescriptor(@NonNull Class<?> clazz) {
+        if (clazz.isPrimitive()) {
+            if (clazz == int.class) return "I";
+            if (clazz == boolean.class) return "Z";
+            if (clazz == float.class) return "F";
+            if (clazz == long.class) return "J";
+            if (clazz == short.class) return "S";
+            if (clazz == byte.class) return "B";
+            if (clazz == double.class) return "D";
+            if (clazz == char.class) return "C";
+            if (clazz == void.class) return "V";
+            // Fallback for unknown primitive types (should never happen in standard Java)
+            throw new IllegalArgumentException("Unknown primitive type encountered: " + clazz.getName() + ". Please report this issue.");
+        }
+        String name = clazz.getName();
+        if (name.startsWith("[")) {
+            // Array type - getName() returns descriptor format but uses dots for object arrays
+            // (e.g., [Ljava.lang.String;). Replace dots with slashes for consistency.
+            return name.replace('.', '/');
+        }
+        // Object type - convert to Lpackage/Class; format
+        return "L" + name.replace('.', '/') + ";";
+    }
+
+    /**
+     * Encode a Class to its fully qualified class name for caching.
      * Returns empty string if class is null.
+     *
+     * @param clazz the class to encode
+     * @return the fully qualified class name, or empty string if null
      */
     @NonNull
     static String encodeClass(@Nullable Class<?> clazz) {
@@ -252,7 +293,7 @@ final class MatchCache {
     @NonNull
     static String encodeField(@Nullable java.lang.reflect.Field field) {
         if (field == null) return "";
-        return field.getDeclaringClass().getName() + "->" + field.getName() + ":" + field.getType().getName();
+        return field.getDeclaringClass().getName() + "->" + field.getName() + ":" + classToDescriptor(field.getType());
     }
 
     /**
@@ -266,10 +307,9 @@ final class MatchCache {
         var params = new StringBuilder();
         var parameterTypes = method.getParameterTypes();
         for (int i = 0; i < parameterTypes.length; i++) {
-            if (i > 0) params.append(",");
-            params.append(parameterTypes[i].getName());
+            params.append(classToDescriptor(parameterTypes[i]));
         }
-        return method.getDeclaringClass().getName() + "->" + method.getName() + "(" + params + ")" + method.getReturnType().getName();
+        return method.getDeclaringClass().getName() + "->" + method.getName() + "(" + params + ")" + classToDescriptor(method.getReturnType());
     }
 
     /**
@@ -283,8 +323,7 @@ final class MatchCache {
         var params = new StringBuilder();
         var parameterTypes = constructor.getParameterTypes();
         for (int i = 0; i < parameterTypes.length; i++) {
-            if (i > 0) params.append(",");
-            params.append(parameterTypes[i].getName());
+            params.append(classToDescriptor(parameterTypes[i]));
         }
         return constructor.getDeclaringClass().getName() + "-><init>(" + params + ")V";
     }
