@@ -1031,7 +1031,7 @@ final class HookBuilderImpl implements HookBuilder {
                     hit.match(null);
                     continue;
                 }
-                // Detect if this is a constructor signature (contains -><init>()
+                // Detect if this is a constructor signature (contains -><init>(
                 java.lang.reflect.Executable executable;
                 if (executableSignature.contains("-><init>(")) {
                     executable = reflector.loadConstructor(executableSignature);
