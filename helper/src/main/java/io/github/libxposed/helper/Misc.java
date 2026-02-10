@@ -252,6 +252,8 @@ final class MatchCache {
             if (clazz == double.class) return "D";
             if (clazz == char.class) return "C";
             if (clazz == void.class) return "V";
+            // Fallback for unknown primitive types (should never happen)
+            throw new IllegalArgumentException("Unknown primitive type: " + clazz.getName());
         }
         String name = clazz.getName();
         if (name.startsWith("[")) {
