@@ -1121,7 +1121,7 @@ final class HookBuilderImpl implements HookBuilder {
         }
     }
 
-    private void saveMatchCache() {
+    private synchronized void saveMatchCache() {
         if (cacheSaved || cacheOutputStream == null || matchCache == null) {
             return;
         }
