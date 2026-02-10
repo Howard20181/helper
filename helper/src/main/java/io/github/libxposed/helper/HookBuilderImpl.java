@@ -15,12 +15,14 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.OutputStream;
 import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Member;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -82,6 +84,14 @@ final class HookBuilderImpl implements HookBuilder {
     @NonNull
     private final SortedSet<StringMatchImpl> stringMatches = new ConcurrentSkipListSet<>((o1, o2) -> o1.matcher.pattern.compareTo(o2.matcher.pattern));
     @NonNull
+    private final ConcurrentHashMap<Member, Set<Method>> methodInvocationsMap = new ConcurrentHashMap<>();
+    @NonNull
+    private final ConcurrentHashMap<Member, Set<Constructor<?>>> constructorInvocationsMap = new ConcurrentHashMap<>();
+    @NonNull
+    private final ConcurrentHashMap<Member, Set<Field>> assignedFieldsMap = new ConcurrentHashMap<>();
+    @NonNull
+    private final ConcurrentHashMap<Member, Set<Field>> accessedFieldsMap = new ConcurrentHashMap<>();
+    @NonNull
     private final HashMap<LazyBind, AtomicInteger> binds = new HashMap<>();
     @NonNull
     private final HashMap<String, ClassMatcherImpl> keyedClassMatchers = new HashMap<>();
@@ -111,6 +121,7 @@ final class HookBuilderImpl implements HookBuilder {
     private InputStream cacheInputStream = null;
     @Nullable
     private OutputStream cacheOutputStream = null;
+    private boolean cacheSaved = false;
     private boolean dexAnalysis = false;
     private boolean forceDexAnalysis = false;
     private boolean includeAnnotations = false;
@@ -124,6 +135,11 @@ final class HookBuilderImpl implements HookBuilder {
     private Handler callbackHandler = null;
     @Nullable
     private MatchCache matchCache = null;
+
+    // Used to terminate DEX analysis early: Stops when all matchFirst matchers have found a match.
+    private final AtomicInteger totalFirstMatchers = new AtomicInteger(0);
+    private final AtomicInteger foundFirstMatchers = new AtomicInteger(0);
+    private volatile boolean shouldStopDexAnalysis = false;
 
     HookBuilderImpl(@NonNull XposedInterface ctx, @NonNull BaseDexClassLoader classLoader, @NonNull String sourcePath) {
         this.ctx = ctx;
@@ -425,6 +441,7 @@ final class HookBuilderImpl implements HookBuilder {
                     callbackExecutor.joinAll();
                 }
                 done = true;
+                saveMatchCache();
                 return null;
             }
 
@@ -448,9 +465,77 @@ final class HookBuilderImpl implements HookBuilder {
                     callbackExecutor.joinAll(unit.convert(nanos - (System.nanoTime() - now), TimeUnit.NANOSECONDS), unit);
                 }
                 done = true;
+                saveMatchCache();
                 return null;
             }
         };
+    }
+
+    private static final int DEFAULT_BUFFER_SIZE = 8192;
+    private static final int MAX_BUFFER_SIZE = Integer.MAX_VALUE - 8;
+
+    private byte[] readNBytes(InputStream in, int len) throws IOException {
+        if (len < 0) {
+            throw new IllegalArgumentException("len < 0");
+        }
+
+        List<byte[]> bufs = null;
+        byte[] result = null;
+        int total = 0;
+        int remaining = len;
+        int n;
+        do {
+            byte[] buf = new byte[Math.min(remaining, DEFAULT_BUFFER_SIZE)];
+            int nread = 0;
+
+            // read to EOF which may read more or less than buffer size
+            while ((n = in.read(buf, nread,
+                    Math.min(buf.length - nread, remaining))) > 0) {
+                nread += n;
+                remaining -= n;
+            }
+
+            if (nread > 0) {
+                if (MAX_BUFFER_SIZE - total < nread) {
+                    throw new OutOfMemoryError("Required array size too large");
+                }
+                if (nread < buf.length) {
+                    buf = Arrays.copyOfRange(buf, 0, nread);
+                }
+                total += nread;
+                if (result == null) {
+                    result = buf;
+                } else {
+                    if (bufs == null) {
+                        bufs = new ArrayList<>();
+                        bufs.add(result);
+                    }
+                    bufs.add(buf);
+                }
+            }
+            // if the last call to read returned -1 or the number of bytes
+            // requested have been read then break
+        } while (n == 0 && remaining > 0);
+
+        if (bufs == null) {
+            if (result == null) {
+                return new byte[0];
+            }
+            return result.length == total ?
+                    result : Arrays.copyOf(result, total);
+        }
+
+        result = new byte[total];
+        int offset = 0;
+        remaining = total;
+        for (byte[] b : bufs) {
+            int count = Math.min(b.length, remaining);
+            System.arraycopy(b, 0, result, offset, count);
+            offset += count;
+            remaining -= count;
+        }
+
+        return result;
     }
 
     private void analysisDex() {
@@ -462,11 +547,19 @@ final class HookBuilderImpl implements HookBuilder {
                 if (dex == null) break;
                 tasks.add(matchExecutor.submit(() -> {
                     var buf = ByteBuffer.allocateDirect((int) dex.getSize());
+                    byte[] result;
                     try (var in = apk.getInputStream(dex)) {
-                        if (in.read(buf.array()) != buf.capacity()) {
-                            throw new IOException("read dex failed");
+                        try {
+                            result = readNBytes(in, buf.capacity());
+                        } catch (IllegalArgumentException | OutOfMemoryError e) {
+                            throw new IOException("read dex failed", e);
+                        }
+                        if (result.length != buf.capacity()) {
+                            throw new IOException("read dex failed: expected " + buf.capacity() + " bytes, got " + result.length);
                         }
                     }
+                    buf.put(result);
+                    buf.flip();
                     return ctx.parseDex(buf, false);
                 }));
             }
@@ -522,13 +615,18 @@ final class HookBuilderImpl implements HookBuilder {
             });
         }
 
-        for (var d = 0; d < parsers.length; ++d) {
-            final int dexId = d;
-            final var dex = parsers[dexId];
+        // Visit all classes and methods to collect method invocation relationships
+        for (var dex : parsers) {
             matchExecutor.submit(() -> dex.visitDefinedClasses(new DexParser.ClassVisitor() {
                 @Override
                 public DexParser.MemberVisitor visit(int clazz, int accessFlags, int superClass, @NonNull int[] interfaces, int sourceFile, @NonNull int[] staticFields, @NonNull int[] staticFieldsAccessFlags, @NonNull int[] instanceFields, @NonNull int[] instanceFieldsAccessFlags, @NonNull int[] directMethods, @NonNull int[] directMethodsAccessFlags, @NonNull int[] virtualMethods, @NonNull int[] virtualMethodsAccessFlags, @NonNull int[] annotations) {
                     return new FieldAndMethodVisitor() {
+                        @Nullable
+                        @Override
+                        public DexParser.MemberVisitor visit(int clazz, int accessFlags, int superClass, @NonNull int[] interfaces, int sourceFile, @NonNull int[] staticFields, @NonNull int[] staticFieldsAccessFlags, @NonNull int[] instanceFields, @NonNull int[] instanceFieldsAccessFlags, @NonNull int[] directMethods, @NonNull int[] directMethodsAccessFlags, @NonNull int[] virtualMethods, @NonNull int[] virtualMethodsAccessFlags, @NonNull int[] annotations) {
+                            return null;
+                        }
+
                         @Override
                         public void visit(int field, int accessFlags, @NonNull int[] annotations) {
 
@@ -537,19 +635,166 @@ final class HookBuilderImpl implements HookBuilder {
                         @Override
                         public DexParser.MethodBodyVisitor visit(int method, int accessFlags, boolean hasBody, @NonNull int[] annotations, @NonNull int[] parameterAnnotations) {
                             return (ignored1, ignored2, referredStrings, invokedMethods, accessedFields, assignedFields, opcodes) -> {
+                                // Skip if there's nothing to process
+                                if (invokedMethods.length == 0 && accessedFields.length == 0 && assignedFields.length == 0 &&
+                                        referredStrings.length == 0 && opcodes.length == 0) {
+                                    return;
+                                }
+
+                                try {
+                                    var allMethodIds = dex.getMethodId();
+                                    var allFieldIds = dex.getFieldId();
+                                    var allStringIds = dex.getStringId();
+                                    if (method < 0 || method >= allMethodIds.length) {
+                                        return;
+                                    }
+
+                                    // Get current method info
+                                    var currentMethodId = allMethodIds[method];
+                                    var currentClassName = currentMethodId.getDeclaringClass().getDescriptor().getString();
+                                    var currentMethodName = currentMethodId.getName().getString();
+                                    var currentProto = currentMethodId.getPrototype();
+
+                                    // Try to resolve current method or constructor via reflection
+                                    Member currentExecutable;
+                                    try {
+                                        var currentClass = reflector.loadClass(currentClassName);
+                                        var currentParamTypes = getParameterTypesFromProto(currentProto);
+                                        if (currentParamTypes == null) {
+                                            return;
+                                        }
+                                        // Check if it's a constructor
+                                        if ("<init>".equals(currentMethodName)) {
+                                            currentExecutable = currentClass.getDeclaredConstructor(currentParamTypes);
+                                        } else {
+                                            currentExecutable = findMethod(currentClass, currentMethodName, currentParamTypes);
+                                            if (currentExecutable == null) {
+                                                return;
+                                            }
+                                        }
+                                    } catch (ClassNotFoundException | NoClassDefFoundError |
+                                             NoSuchMethodException e) {
+                                        return;
+                                    }
+
+                                    // Collect all methods and constructors invoked by this method
+                                    Set<Method> invokedMethodsSet = new HashSet<>();
+                                    Set<Constructor<?>> invokedConstructorsSet = new HashSet<>();
+
+                                    for (int invokedMethodIdx : invokedMethods) {
+                                        if (invokedMethodIdx < 0 || invokedMethodIdx >= allMethodIds.length) {
+                                            continue;
+                                        }
+
+                                        try {
+                                            var invokedMethodId = allMethodIds[invokedMethodIdx];
+                                            var invokedClassName = invokedMethodId.getDeclaringClass().getDescriptor().getString();
+                                            var invokedMethodName = invokedMethodId.getName().getString();
+                                            var invokedProto = invokedMethodId.getPrototype();
+
+                                            var invokedClass = reflector.loadClass(invokedClassName);
+                                            var invokedParamTypes = getParameterTypesFromProto(invokedProto);
+
+                                            if (invokedParamTypes != null) {
+                                                // Check if it's a constructor
+                                                if ("<init>".equals(invokedMethodName)) {
+                                                    try {
+                                                        var constructor = invokedClass.getDeclaredConstructor(invokedParamTypes);
+                                                        invokedConstructorsSet.add(constructor);
+                                                    } catch (NoSuchMethodException e) {
+                                                        // Constructor not accessible, skip
+                                                    }
+                                                } else {
+                                                    var invokedMethod = findMethod(invokedClass, invokedMethodName, invokedParamTypes);
+                                                    if (invokedMethod != null) {
+                                                        invokedMethodsSet.add(invokedMethod);
+                                                    }
+                                                }
+                                            }
+                                        } catch (ClassNotFoundException | NoClassDefFoundError e) {
+                                            // Class not loadable, skip
+                                        }
+                                    }
+
+                                    // Collect all fields accessed by this method
+                                    Set<Field> accessedFieldsSet = new HashSet<>();
+                                    for (int accessedFieldIdx : accessedFields) {
+                                        if (accessedFieldIdx < 0 || accessedFieldIdx >= allFieldIds.length) {
+                                            continue;
+                                        }
+
+                                        try {
+                                            var accessedFieldId = allFieldIds[accessedFieldIdx];
+                                            var fieldClassName = accessedFieldId.getDeclaringClass().getDescriptor().getString();
+                                            var fieldName = accessedFieldId.getName().getString();
+                                            var fieldTypeDescriptor = accessedFieldId.getType().getDescriptor().getString();
+
+                                            var fieldClass = reflector.loadClass(fieldClassName);
+                                            var fieldType = reflector.loadClass(fieldTypeDescriptor);
+
+                                            var field = findField(fieldClass, fieldName, fieldType);
+                                            if (field != null) {
+                                                accessedFieldsSet.add(field);
+                                            }
+                                        } catch (ClassNotFoundException | NoClassDefFoundError e) {
+                                            // Class not loadable, skip
+                                        }
+                                    }
+
+                                    // Collect all fields assigned by this method
+                                    Set<Field> assignedFieldsSet = new HashSet<>();
+                                    for (int assignedFieldIdx : assignedFields) {
+                                        if (assignedFieldIdx < 0 || assignedFieldIdx >= allFieldIds.length) {
+                                            continue;
+                                        }
+
+                                        try {
+                                            var assignedFieldId = allFieldIds[assignedFieldIdx];
+                                            var fieldClassName = assignedFieldId.getDeclaringClass().getDescriptor().getString();
+                                            var fieldName = assignedFieldId.getName().getString();
+                                            var fieldTypeDescriptor = assignedFieldId.getType().getDescriptor().getString();
+
+                                            var fieldClass = reflector.loadClass(fieldClassName);
+                                            var fieldType = reflector.loadClass(fieldTypeDescriptor);
+
+                                            var field = findField(fieldClass, fieldName, fieldType);
+                                            if (field != null) {
+                                                assignedFieldsSet.add(field);
+                                            }
+                                        } catch (ClassNotFoundException | NoClassDefFoundError e) {
+                                            // Class not loadable, skip
+                                        }
+                                    }
+
+                                    // Store the invocation relationships
+                                    if (!invokedMethodsSet.isEmpty()) {
+                                        methodInvocationsMap.put(currentExecutable, invokedMethodsSet);
+                                    }
+                                    if (!invokedConstructorsSet.isEmpty()) {
+                                        constructorInvocationsMap.put(currentExecutable, invokedConstructorsSet);
+                                    }
+                                    // Store the field access/assignment relationships
+                                    if (!accessedFieldsSet.isEmpty()) {
+                                        accessedFieldsMap.put(currentExecutable, accessedFieldsSet);
+                                    }
+                                    if (!assignedFieldsSet.isEmpty()) {
+                                        assignedFieldsMap.put(currentExecutable, assignedFieldsSet);
+                                    }
+                                } catch (Exception ignored) {
+                                }
                             };
                         }
 
                         @Override
                         public boolean stop() {
-                            return false;
+                            return shouldStopDexAnalysis;
                         }
                     };
                 }
 
                 @Override
                 public boolean stop() {
-                    return false;
+                    return shouldStopDexAnalysis;
                 }
             }));
         }
@@ -569,7 +814,88 @@ final class HookBuilderImpl implements HookBuilder {
         }
     }
 
-    private TreeSetView<String> getAllClassNamesFromClassLoader() throws NoSuchFieldException, IllegalAccessException {
+    /**
+     * Extract parameter types from a ProtoId.
+     * Converts DEX type descriptors to Class objects.
+     */
+    private Class<?>[] getParameterTypesFromProto(DexParser.ProtoId protoId) {
+        try {
+            var paramTypeIds = protoId.getParameters();
+            if (paramTypeIds == null || paramTypeIds.length == 0) {
+                return new Class<?>[0];
+            }
+            var paramTypes = new Class<?>[paramTypeIds.length];
+            for (int i = 0; i < paramTypeIds.length; i++) {
+                var descriptor = paramTypeIds[i].getDescriptor().getString();
+                paramTypes[i] = reflector.loadClass(descriptor);
+            }
+            return paramTypes;
+        } catch (ClassNotFoundException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Finds a method in a class or its superclasses/interfaces.
+     * First tries getMethod() for public methods (which includes inherited ones),
+     * then walks the class hierarchy for non-public methods.
+     *
+     * @param clazz          The class to search in
+     * @param methodName     The name of the method
+     * @param parameterTypes The parameter types of the method
+     * @return The found method, or null if not found
+     */
+    private Method findMethod(Class<?> clazz, String methodName, Class<?>[] parameterTypes) {
+        // Try public methods first (includes inherited public methods)
+        try {
+            return clazz.getMethod(methodName, parameterTypes);
+        } catch (NoSuchMethodException e) {
+            // Not a public method, walk the hierarchy
+        }
+
+        // Walk the class hierarchy for non-public methods
+        Class<?> current = clazz;
+        while (current != null) {
+            try {
+                return current.getDeclaredMethod(methodName, parameterTypes);
+            } catch (NoSuchMethodException e) {
+                // Try superclass
+            }
+            current = current.getSuperclass();
+        }
+
+        return null;
+    }
+
+    private Field findField(Class<?> clazz, String fieldName, Class<?> fieldType) {
+        // Try public fields first (includes inherited public fields)
+        try {
+            Field field = clazz.getField(fieldName);
+            if (field.getType().equals(fieldType)) {
+                return field;
+            }
+        } catch (NoSuchFieldException e) {
+            // Not a public field, walk the hierarchy
+        }
+
+        // Walk the class hierarchy for non-public fields
+        Class<?> current = clazz;
+        while (current != null) {
+            try {
+                Field field = current.getDeclaredField(fieldName);
+                if (field.getType().equals(fieldType)) {
+                    return field;
+                }
+            } catch (NoSuchFieldException e) {
+                // Try superclass
+            }
+            current = current.getSuperclass();
+        }
+
+        return null;
+    }
+
+    private TreeSetView<String> getAllClassNamesFromClassLoader() throws NoSuchFieldException, IllegalAccessException, NoSuchMethodException, InvocationTargetException {
         TreeSetView<String> res = TreeSetView.ofSorted(new String[0]);
         @SuppressWarnings("JavaReflectionMemberAccess") @SuppressLint("DiscouragedPrivateApi") var pathListField = BaseDexClassLoader.class.getDeclaredField("pathList");
         pathListField.setAccessible(true);
@@ -590,9 +916,8 @@ final class HookBuilderImpl implements HookBuilder {
             if (dexFile == null) {
                 continue;
             }
-            final var entriesField = dexFile.getClass().getDeclaredField("entries");
-            entriesField.setAccessible(true);
-            @SuppressWarnings("unchecked") final var entries = (Enumeration<String>) entriesField.get(dexFile);
+            final var entriesMethod = dexFile.getClass().getDeclaredMethod("entries");
+            @SuppressWarnings("unchecked") final var entries = (Enumeration<String>) entriesMethod.invoke(dexFile);
             if (entries == null) {
                 continue;
             }
@@ -695,19 +1020,25 @@ final class HookBuilderImpl implements HookBuilder {
             if (hit == null) continue;
             try {
                 var cache = e.getValue();
-                var methodName = cache.getValue();
+                var executableSignature = cache.getValue();
                 var idx = cache.getKey();
-                if (methodName.isEmpty()) {
+                if (executableSignature.isEmpty()) {
                     hit.match(null);
                     continue;
                 }
-                var m = reflector.loadMethod(methodName);
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                    var p = m.getParameters()[idx];
-                    hit.match(new ParameterImpl(idx, p.getType(), m, p.getModifiers()));
+                // Detect if this is a constructor signature (contains -><init>(
+                Executable executable;
+                if (executableSignature.contains("-><init>(")) {
+                    executable = reflector.loadConstructor(executableSignature);
                 } else {
-                    var p = m.getParameterTypes()[idx];
-                    hit.match(new ParameterImpl(idx, p, m, 0));
+                    executable = reflector.loadMethod(executableSignature);
+                }
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    var p = executable.getParameters()[idx];
+                    hit.match(new ParameterImpl(idx, p.getType(), executable, p.getModifiers()));
+                } else {
+                    var p = executable.getParameterTypes()[idx];
+                    hit.match(new ParameterImpl(idx, p, executable, 0));
                 }
             } catch (Throwable ex) {
                 hit.match(null);
@@ -789,6 +1120,87 @@ final class HookBuilderImpl implements HookBuilder {
                 }
             }
         }
+    }
+
+    private synchronized void saveMatchCache() {
+        if (cacheSaved || cacheOutputStream == null || matchCache == null) {
+            return;
+        }
+        try {
+            try (var out = new ObjectOutputStream(cacheOutputStream)) {
+                out.writeObject(matchCache.cacheInfo);
+                out.writeObject(matchCache.classListCache);
+                out.writeObject(matchCache.methodListCache);
+                out.writeObject(matchCache.fieldListCache);
+                out.writeObject(matchCache.constructorListCache);
+                out.writeObject(matchCache.parameterListCache);
+
+                out.writeObject(matchCache.classCache);
+                out.writeObject(matchCache.methodCache);
+                out.writeObject(matchCache.fieldCache);
+                out.writeObject(matchCache.constructorCache);
+                out.writeObject(matchCache.parameterCache);
+            }
+            cacheSaved = true;
+            cacheOutputStream = null;
+        } catch (Throwable e) {
+            if (exceptionHandler != null) {
+                exceptionHandler.test(e);
+            }
+        }
+    }
+
+    private HashSet<String> encodeClasses(@Nullable Collection<Class<?>> classes) {
+        var result = new HashSet<String>();
+        if (classes == null) return result;
+        for (var clazz : classes) {
+            result.add(MatchCache.encodeClass(clazz));
+        }
+        return result;
+    }
+
+    private HashSet<String> encodeFields(@Nullable Collection<Field> fields) {
+        var result = new HashSet<String>();
+        if (fields == null) return result;
+        for (var field : fields) {
+            result.add(MatchCache.encodeField(field));
+        }
+        return result;
+    }
+
+    private HashSet<String> encodeMethods(@Nullable Collection<java.lang.reflect.Method> methods) {
+        var result = new HashSet<String>();
+        if (methods == null) return result;
+        for (var method : methods) {
+            result.add(MatchCache.encodeMethod(method));
+        }
+        return result;
+    }
+
+    private HashSet<String> encodeConstructors(@Nullable Collection<Constructor<?>> constructors) {
+        var result = new HashSet<String>();
+        if (constructors == null) return result;
+        for (var constructor : constructors) {
+            result.add(MatchCache.encodeConstructor(constructor));
+        }
+        return result;
+    }
+
+    private HashSet<AbstractMap.SimpleEntry<Integer, String>> encodeParameters(@Nullable Collection<Parameter> parameters) {
+        var result = new HashSet<AbstractMap.SimpleEntry<Integer, String>>();
+        if (parameters == null) return result;
+        for (var parameter : parameters) {
+            var executable = parameter.getDeclaringExecutable();
+            var index = parameter.getIndex();
+            String encodedMethod;
+            if (executable instanceof java.lang.reflect.Method) {
+                encodedMethod = MatchCache.encodeMethod((java.lang.reflect.Method) executable);
+            } else {
+                encodedMethod = MatchCache.encodeConstructor((Constructor<?>) executable);
+            }
+            result.add(new AbstractMap.SimpleEntry<>(index, encodedMethod));
+        }
+        return result;
     }
 
     private <Reflect extends Member> void memberClassLists(MemberMatcherImpl<?, ?, Reflect, ?, ?> matcher, Transformer<Class<?>, Reflect[]> transformer) {
@@ -935,9 +1347,15 @@ final class HookBuilderImpl implements HookBuilder {
 
         protected final synchronized SeqImpl build() {
             final var lazySequence = onBuild();
+            // Mark if this is a root sequence (not a dependency sequence)
+            lazySequence.isRootSequence = (rootMatcher == this);
             // specially, if matchFirst is true, propagate the key to the first match
             if (matchFirst && key != null) {
                 final var f = lazySequence.first().setKey(key);
+            }
+            // If it's matchFirst, register it in the counter.
+            if (matchFirst && rootMatcher == this) {
+                totalFirstMatchers.incrementAndGet();
             }
             if (!pending) {
                 setNonPending();
@@ -1096,7 +1514,9 @@ final class HookBuilderImpl implements HookBuilder {
         protected ClassLazySequenceImpl onBuild() {
             if (key != null) keyedClassMatchers.put(key, this);
             if (rootMatcher != this) rootClassMatchers.add(this);
-            return new ClassLazySequenceImpl(rootMatcher);
+            var seq = new ClassLazySequenceImpl(rootMatcher);
+            seq.key = key;
+            return seq;
         }
 
         @CallSuper
@@ -1191,7 +1611,9 @@ final class HookBuilderImpl implements HookBuilder {
         protected ParameterLazySequenceImpl onBuild() {
             if (key != null) keyedParameterMatchers.put(key, this);
 //            if (rootMatcher != this) rootParameterMatchers.add(this);
-            return new ParameterLazySequenceImpl(rootMatcher);
+            var seq = new ParameterLazySequenceImpl(rootMatcher);
+            seq.key = key;
+            return seq;
         }
 
         @Override
@@ -1338,7 +1760,9 @@ final class HookBuilderImpl implements HookBuilder {
         protected FieldLazySequenceImpl onBuild() {
             if (key != null) keyedFieldMatchers.put(key, this);
             if (rootMatcher != this) rootFieldMatchers.add(this);
-            return new FieldLazySequenceImpl(rootMatcher);
+            var seq = new FieldLazySequenceImpl(rootMatcher);
+            seq.key = key;
+            return seq;
         }
 
         @Override
@@ -1448,7 +1872,64 @@ final class HookBuilderImpl implements HookBuilder {
             } else {
                 return false;
             }
-            return this.parameterCount == -1 || this.parameterCount == parameterCount;
+            if (this.parameterCount != -1 && this.parameterCount != parameterCount) {
+                return false;
+            }
+
+            // Check invoked methods constraint
+            if (invokedMethods != null) {
+                var invokedMethodsSet = methodInvocationsMap.get(reflect);
+                if (invokedMethodsSet == null || invokedMethodsSet.isEmpty()) {
+                    return false;
+                }
+
+                // Test if the invoked methods set matches the constraint
+                var hashSet = new HashSet<>(invokedMethodsSet);
+                if (!invokedMethods.test(hashSet)) {
+                    return false;
+                }
+            }
+
+            // Check invoked constructors constraint
+            if (invokedConstructors != null) {
+                var invokedConstructorsSet = constructorInvocationsMap.get(reflect);
+                if (invokedConstructorsSet == null || invokedConstructorsSet.isEmpty()) {
+                    return false;
+                }
+
+                // Test if the invoked constructors set matches the constraint
+                var hashSet = new HashSet<>(invokedConstructorsSet);
+                if (!invokedConstructors.test(hashSet)) {
+                    return false;
+                }
+            }
+
+            // Check assigned fields constraint
+            if (assignedFields != null) {
+                var assignedFieldsSet = assignedFieldsMap.get(reflect);
+                if (assignedFieldsSet == null || assignedFieldsSet.isEmpty()) {
+                    return false;
+                }
+
+                // Test if the assigned fields set matches the constraint
+                var hashSet = new HashSet<>(assignedFieldsSet);
+                if (!assignedFields.test(hashSet)) {
+                    return false;
+                }
+            }
+
+            // Check accessed fields constraint
+            if (accessedFields != null) {
+                var accessedFieldsSet = accessedFieldsMap.get(reflect);
+                if (accessedFieldsSet == null || accessedFieldsSet.isEmpty()) {
+                    return false;
+                }
+
+                // Test if the accessed fields set matches the constraint
+                var hashSet = new HashSet<>(accessedFieldsSet);
+                return accessedFields.test(hashSet);
+            }
+            return true;
         }
 
         @NonNull
@@ -1664,7 +2145,9 @@ final class HookBuilderImpl implements HookBuilder {
         protected MethodLazySequenceImpl onBuild() {
             if (key != null) keyedMethodMatchers.put(key, this);
             if (rootMatcher != this) rootMethodMatchers.add(this);
-            return new MethodLazySequenceImpl(rootMatcher);
+            var seq = new MethodLazySequenceImpl(rootMatcher);
+            seq.key = key;
+            return seq;
         }
 
         @NonNull
@@ -1728,7 +2211,10 @@ final class HookBuilderImpl implements HookBuilder {
         @Override
         protected ConstructorLazySequenceImpl onBuild() {
             if (key != null) keyedConstructorMatchers.put(key, this);
-            return new ConstructorLazySequenceImpl(rootMatcher);
+            if (rootMatcher != this) rootConstructorMatchers.add(this);
+            var seq = new ConstructorLazySequenceImpl(rootMatcher);
+            seq.key = key;
+            return seq;
         }
     }
 
@@ -2035,6 +2521,10 @@ final class HookBuilderImpl implements HookBuilder {
     private abstract class LazySequenceImpl<Base extends LazySequence<Base, Match, Reflect, Matcher>, Match extends ReflectMatch<Match, Reflect, Matcher>, Reflect, Matcher extends ReflectMatcher<Matcher>, MatchImpl extends ReflectMatchImpl<MatchImpl, Match, Reflect, Matcher, MatcherImpl, DexId>, MatcherImpl extends ReflectMatcherImpl<MatcherImpl, Matcher, Reflect, DexId, ?>, DexId extends DexParser.Id<DexId>> implements LazySequence<Base, Match, Reflect, Matcher> {
         @NonNull
         protected final ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher;
+        // True if this sequence was built from a root matcher (not a dependency matcher)
+        protected boolean isRootSequence = false;
+        @Nullable
+        protected String key;
         @NonNull
         protected final AtomicReference<int[][]> dexMatches = new AtomicReference<>(null);
         @NonNull
@@ -2160,6 +2650,19 @@ final class HookBuilderImpl implements HookBuilder {
 
         protected final synchronized void match(@NonNull Collection<Reflect> matches) {
             if (!this.matches.compareAndSet(null, matches)) return;
+
+            // If it's matchFirst and a match is found, update the counter.
+            // Only count for root sequences, not dependency sequences that share the same rootMatcher.
+            if (isRootSequence && rootMatcher.matchFirst && matches.iterator().hasNext()) {
+                int found = foundFirstMatchers.incrementAndGet();
+                int total = totalFirstMatchers.get();
+
+                // If all matchFirst matchers have found a match, set the stop flag.
+                if (found >= total && total > 0) {
+                    shouldStopDexAnalysis = true;
+                }
+            }
+
             final Runnable runnable = () -> {
                 for (final var observer : observers) {
                     observer.update(matches);
@@ -2198,6 +2701,13 @@ final class HookBuilderImpl implements HookBuilder {
     private class ClassLazySequenceImpl extends LazySequenceImpl<ClassLazySequence, ClassMatch, Class<?>, ClassMatcher, ClassMatchImpl, ClassMatcherImpl, DexParser.TypeId> implements ClassLazySequence {
         protected ClassLazySequenceImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            if (matchCache != null) {
+                addObserver((ListObserver<Class<?>>) matches -> {
+                    if (key != null) {
+                        matchCache.classListCache.put(key, encodeClasses(matches));
+                    }
+                });
+            }
         }
 
         @NonNull
@@ -2306,6 +2816,13 @@ final class HookBuilderImpl implements HookBuilder {
     private final class ParameterLazySequenceImpl extends LazySequenceImpl<ParameterLazySequence, ParameterMatch, Parameter, ParameterMatcher, ParameterMatchImpl, ParameterMatcherImpl, DexParser.TypeId> implements ParameterLazySequence {
         private ParameterLazySequenceImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            if (matchCache != null) {
+                addObserver((ListObserver<Parameter>) matches -> {
+                    if (key != null) {
+                        matchCache.parameterListCache.put(key, encodeParameters(matches));
+                    }
+                });
+            }
         }
 
         @NonNull
@@ -2390,6 +2907,13 @@ final class HookBuilderImpl implements HookBuilder {
     private final class FieldLazySequenceImpl extends MemberLazySequenceImpl<FieldLazySequence, FieldMatch, Field, FieldMatcher, FieldMatchImpl, FieldMatcherImpl, DexParser.FieldId> implements FieldLazySequence {
         private FieldLazySequenceImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            if (matchCache != null) {
+                addObserver((ListObserver<Field>) matches -> {
+                    if (key != null) {
+                        matchCache.fieldListCache.put(key, encodeFields(matches));
+                    }
+                });
+            }
         }
 
         private void addTypesObserver(@NonNull ClassMatcherImpl m) {
@@ -2505,6 +3029,13 @@ final class HookBuilderImpl implements HookBuilder {
     private final class MethodLazySequenceImpl extends ExecutableLazySequenceImpl<MethodLazySequence, MethodMatch, Method, MethodMatcher, MethodMatchImpl, MethodMatcherImpl> implements MethodLazySequence {
         private MethodLazySequenceImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            if (matchCache != null) {
+                addObserver((ListObserver<Method>) matches -> {
+                    if (key != null) {
+                        matchCache.methodListCache.put(key, encodeMethods(matches));
+                    }
+                });
+            }
         }
 
         private void addReturnTypesObserver(@NonNull ClassMatcherImpl m) {
@@ -2553,6 +3084,13 @@ final class HookBuilderImpl implements HookBuilder {
     private final class ConstructorLazySequenceImpl extends ExecutableLazySequenceImpl<ConstructorLazySequence, ConstructorMatch, Constructor<?>, ConstructorMatcher, ConstructorMatchImpl, ConstructorMatcherImpl> implements ConstructorLazySequence {
         private ConstructorLazySequenceImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            if (matchCache != null) {
+                addObserver((ListObserver<Constructor<?>>) matches -> {
+                    if (key != null) {
+                        matchCache.constructorListCache.put(key, encodeConstructors(matches));
+                    }
+                });
+            }
         }
 
         @NonNull
@@ -2732,6 +3270,11 @@ final class HookBuilderImpl implements HookBuilder {
     private class ClassMatchImpl extends ReflectMatchImpl<ClassMatchImpl, ClassMatch, Class<?>, ClassMatcher, ClassMatcherImpl, DexParser.TypeId> implements ClassMatch {
         protected ClassMatchImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            addObserver((ItemObserver<Class<?>>) match -> {
+                if (key != null && matchCache != null) {
+                    matchCache.classCache.put(key, MatchCache.encodeClass(match));
+                }
+            });
         }
 
         @NonNull
@@ -2766,6 +3309,36 @@ final class HookBuilderImpl implements HookBuilder {
 
         @NonNull
         @Override
+        public final MethodLazySequence findMethods(@NonNull Consumer<MethodMatcher> matcher) {
+            final var m = new MethodMatcherImpl(rootMatcher, false);
+            addObserver((ItemObserver<Class<?>>) result -> {
+                if (result != null) {
+                    var classMatch = new ClassMatchImpl(rootMatcher);
+                    classMatch.match(result);
+                    m.setDeclaringClass(classMatch);
+                }
+            });
+            matcher.accept(m);
+            return m.build();
+        }
+
+        @NonNull
+        @Override
+        public final MethodMatch findFirstMethod(@NonNull Consumer<MethodMatcher> matcher) {
+            final var m = new MethodMatcherImpl(rootMatcher, true);
+            addObserver((ItemObserver<Class<?>>) result -> {
+                if (result != null) {
+                    var classMatch = new ClassMatchImpl(rootMatcher);
+                    classMatch.match(result);
+                    m.setDeclaringClass(classMatch);
+                }
+            });
+            matcher.accept(m);
+            return m.build().first();
+        }
+
+        @NonNull
+        @Override
         public final ConstructorLazySequence getDeclaredConstructors() {
             final var m = new ConstructorLazySequenceImpl(rootMatcher);
             addObserver((ItemObserver<Class<?>>) result -> m.match(result == null ? Collections.emptyList() : List.of(result.getDeclaredConstructors())));
@@ -2774,10 +3347,70 @@ final class HookBuilderImpl implements HookBuilder {
 
         @NonNull
         @Override
+        public final ConstructorLazySequence findConstructors(@NonNull Consumer<ConstructorMatcher> matcher) {
+            final var c = new ConstructorMatcherImpl(rootMatcher, false);
+            addObserver((ItemObserver<Class<?>>) result -> {
+                if (result != null) {
+                    var classMatch = new ClassMatchImpl(rootMatcher);
+                    classMatch.match(result);
+                    c.setDeclaringClass(classMatch);
+                }
+            });
+            matcher.accept(c);
+            return c.build();
+        }
+
+        @NonNull
+        @Override
+        public final ConstructorMatch findFirstConstructor(@NonNull Consumer<ConstructorMatcher> matcher) {
+            final var c = new ConstructorMatcherImpl(rootMatcher, true);
+            addObserver((ItemObserver<Class<?>>) result -> {
+                if (result != null) {
+                    var classMatch = new ClassMatchImpl(rootMatcher);
+                    classMatch.match(result);
+                    c.setDeclaringClass(classMatch);
+                }
+            });
+            matcher.accept(c);
+            return c.build().first();
+        }
+
+        @NonNull
+        @Override
         public final FieldLazySequence getDeclaredFields() {
             final var m = new FieldLazySequenceImpl(rootMatcher);
             addObserver((ItemObserver<Class<?>>) result -> m.match(result == null ? Collections.emptyList() : List.of(result.getDeclaredFields())));
             return m;
+        }
+
+        @NonNull
+        @Override
+        public final FieldLazySequence findFields(@NonNull Consumer<FieldMatcher> matcher) {
+            final var f = new FieldMatcherImpl(rootMatcher, false);
+            addObserver((ItemObserver<Class<?>>) result -> {
+                if (result != null) {
+                    var classMatch = new ClassMatchImpl(rootMatcher);
+                    classMatch.match(result);
+                    f.setDeclaringClass(classMatch);
+                }
+            });
+            matcher.accept(f);
+            return f.build();
+        }
+
+        @NonNull
+        @Override
+        public final FieldMatch findFirstField(@NonNull Consumer<FieldMatcher> matcher) {
+            final var f = new FieldMatcherImpl(rootMatcher, true);
+            addObserver((ItemObserver<Class<?>>) result -> {
+                if (result != null) {
+                    var classMatch = new ClassMatchImpl(rootMatcher);
+                    classMatch.match(result);
+                    f.setDeclaringClass(classMatch);
+                }
+            });
+            matcher.accept(f);
+            return f.build().first();
         }
 
         @NonNull
@@ -2804,6 +3437,23 @@ final class HookBuilderImpl implements HookBuilder {
 
         private ParameterMatchImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            addObserver((ItemObserver<Parameter>) match -> {
+                if (key != null && matchCache != null) {
+                    if (match == null) {
+                        matchCache.parameterCache.put(key, new AbstractMap.SimpleEntry<>(-1, ""));
+                    } else {
+                        var executable = match.getDeclaringExecutable();
+                        var index = match.getIndex();
+                        String encodedMethod;
+                        if (executable instanceof java.lang.reflect.Method) {
+                            encodedMethod = MatchCache.encodeMethod((java.lang.reflect.Method) executable);
+                        } else {
+                            encodedMethod = MatchCache.encodeConstructor((Constructor<?>) executable);
+                        }
+                        matchCache.parameterCache.put(key, new AbstractMap.SimpleEntry<>(index, encodedMethod));
+                    }
+                }
+            });
         }
 
         @NonNull
@@ -2844,6 +3494,11 @@ final class HookBuilderImpl implements HookBuilder {
     private final class FieldMatchImpl extends MemberMatchImpl<FieldMatchImpl, FieldMatch, Field, FieldMatcher, FieldMatcherImpl, DexParser.FieldId> implements FieldMatch {
         private FieldMatchImpl(ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            addObserver((ItemObserver<Field>) match -> {
+                if (key != null && matchCache != null) {
+                    matchCache.fieldCache.put(key, MatchCache.encodeField(match));
+                }
+            });
         }
 
         @NonNull
@@ -2926,7 +3581,20 @@ final class HookBuilderImpl implements HookBuilder {
         @Override
         public final FieldLazySequence getAssignedFields() {
             dexAnalysis = true;
-            return null;
+            final var m = new FieldLazySequenceImpl(rootMatcher);
+            addObserver((ItemObserver<Reflect>) result -> {
+                if (result instanceof Method || result instanceof Constructor) {
+                    var assignedFieldsSet = assignedFieldsMap.get(result);
+                    if (assignedFieldsSet != null) {
+                        m.match(new ArrayList<>(assignedFieldsSet));
+                    } else {
+                        m.match(Collections.emptyList());
+                    }
+                } else {
+                    m.match(Collections.emptyList());
+                }
+            });
+            return m;
         }
 
         @DexAnalysis
@@ -2934,7 +3602,20 @@ final class HookBuilderImpl implements HookBuilder {
         @Override
         public final FieldLazySequence getAccessedFields() {
             dexAnalysis = true;
-            return null;
+            final var m = new FieldLazySequenceImpl(rootMatcher);
+            addObserver((ItemObserver<Reflect>) result -> {
+                if (result instanceof Method || result instanceof Constructor) {
+                    var accessedFieldsSet = accessedFieldsMap.get(result);
+                    if (accessedFieldsSet != null) {
+                        m.match(new ArrayList<>(accessedFieldsSet));
+                    } else {
+                        m.match(Collections.emptyList());
+                    }
+                } else {
+                    m.match(Collections.emptyList());
+                }
+            });
+            return m;
         }
 
         @DexAnalysis
@@ -2942,7 +3623,20 @@ final class HookBuilderImpl implements HookBuilder {
         @Override
         public final MethodLazySequence getInvokedMethods() {
             dexAnalysis = true;
-            return null;
+            final var m = new MethodLazySequenceImpl(rootMatcher);
+            addObserver((ItemObserver<Reflect>) result -> {
+                if (result instanceof Method || result instanceof Constructor) {
+                    var invokedMethodsSet = methodInvocationsMap.get(result);
+                    if (invokedMethodsSet != null) {
+                        m.match(new ArrayList<>(invokedMethodsSet));
+                    } else {
+                        m.match(Collections.emptyList());
+                    }
+                } else {
+                    m.match(Collections.emptyList());
+                }
+            });
+            return m;
         }
 
         @DexAnalysis
@@ -2950,13 +3644,31 @@ final class HookBuilderImpl implements HookBuilder {
         @Override
         public final ConstructorLazySequence getInvokedConstructors() {
             dexAnalysis = true;
-            return null;
+            final var m = new ConstructorLazySequenceImpl(rootMatcher);
+            addObserver((ItemObserver<Reflect>) result -> {
+                if (result instanceof Method || result instanceof Constructor) {
+                    var invokedConstructorsSet = constructorInvocationsMap.get(result);
+                    if (invokedConstructorsSet != null) {
+                        m.match(new ArrayList<>(invokedConstructorsSet));
+                    } else {
+                        m.match(Collections.emptyList());
+                    }
+                } else {
+                    m.match(Collections.emptyList());
+                }
+            });
+            return m;
         }
     }
 
     private final class MethodMatchImpl extends ExecutableMatchImpl<MethodMatchImpl, MethodMatch, Method, MethodMatcher, MethodMatcherImpl> implements MethodMatch {
         private MethodMatchImpl(ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            addObserver((ItemObserver<Method>) match -> {
+                if (key != null && matchCache != null) {
+                    matchCache.methodCache.put(key, MatchCache.encodeMethod(match));
+                }
+            });
         }
 
         @NonNull
@@ -2987,6 +3699,11 @@ final class HookBuilderImpl implements HookBuilder {
     private final class ConstructorMatchImpl extends ExecutableMatchImpl<ConstructorMatchImpl, ConstructorMatch, Constructor<?>, ConstructorMatcher, ConstructorMatcherImpl> implements ConstructorMatch {
         private ConstructorMatchImpl(ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
+            addObserver((ItemObserver<Constructor<?>>) match -> {
+                if (key != null && matchCache != null) {
+                    matchCache.constructorCache.put(key, MatchCache.encodeConstructor(match));
+                }
+            });
         }
 
         @NonNull
