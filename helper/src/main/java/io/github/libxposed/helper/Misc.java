@@ -233,6 +233,82 @@ final class MatchCache {
     ConcurrentHashMap<String, String> constructorCache = new ConcurrentHashMap<>();
     @NonNull
     ConcurrentHashMap<String, AbstractMap.SimpleEntry<Integer, String>> parameterCache = new ConcurrentHashMap<>();
+
+    /**
+     * Convert a Java Class to its Smali descriptor.
+     * Examples: int -> I, String -> Ljava/lang/String;, int[] -> [I
+     */
+    @NonNull
+    private static String classToDescriptor(@NonNull Class<?> clazz) {
+        if (clazz.isPrimitive()) {
+            if (clazz == int.class) return "I";
+            if (clazz == boolean.class) return "Z";
+            if (clazz == byte.class) return "B";
+            if (clazz == char.class) return "C";
+            if (clazz == short.class) return "S";
+            if (clazz == long.class) return "J";
+            if (clazz == float.class) return "F";
+            if (clazz == double.class) return "D";
+            if (clazz == void.class) return "V";
+        }
+        if (clazz.isArray()) {
+            return "[" + classToDescriptor(clazz.getComponentType());
+        }
+        return "L" + clazz.getName().replace('.', '/') + ";";
+    }
+
+    /**
+     * Encode a Class to its string representation for caching.
+     * Returns empty string if class is null.
+     */
+    @NonNull
+    static String encodeClass(@Nullable Class<?> clazz) {
+        if (clazz == null) return "";
+        return clazz.getName();
+    }
+
+    /**
+     * Encode a Field to its string representation for caching.
+     * Format: Lcom/example/Class;->fieldName:Lcom/example/Type; (Smali descriptor format)
+     * Returns empty string if field is null.
+     */
+    @NonNull
+    static String encodeField(@Nullable java.lang.reflect.Field field) {
+        if (field == null) return "";
+        return classToDescriptor(field.getDeclaringClass()) + "->" + field.getName() + ":" + classToDescriptor(field.getType());
+    }
+
+    /**
+     * Encode a Method to its string representation for caching.
+     * Format: Lcom/example/Class;->methodName(Lcom/example/Param;I)Lcom/example/Return; (Smali descriptor format)
+     * Returns empty string if method is null.
+     */
+    @NonNull
+    static String encodeMethod(@Nullable java.lang.reflect.Method method) {
+        if (method == null) return "";
+        var params = new StringBuilder();
+        var parameterTypes = method.getParameterTypes();
+        for (var paramType : parameterTypes) {
+            params.append(classToDescriptor(paramType));
+        }
+        return classToDescriptor(method.getDeclaringClass()) + "->" + method.getName() + "(" + params + ")" + classToDescriptor(method.getReturnType());
+    }
+
+    /**
+     * Encode a Constructor to its string representation for caching.
+     * Format: Lcom/example/Class;-><init>(Lcom/example/Param;I)V (Smali descriptor format)
+     * Returns empty string if constructor is null.
+     */
+    @NonNull
+    static String encodeConstructor(@Nullable java.lang.reflect.Constructor<?> constructor) {
+        if (constructor == null) return "";
+        var params = new StringBuilder();
+        var parameterTypes = constructor.getParameterTypes();
+        for (var paramType : parameterTypes) {
+            params.append(classToDescriptor(paramType));
+        }
+        return classToDescriptor(constructor.getDeclaringClass()) + "-><init>(" + params + ")V";
+    }
 }
 
 final class TreeSetView<T extends Comparable<T>> implements Set<T>, SortedSet<T>, NavigableSet<T> {

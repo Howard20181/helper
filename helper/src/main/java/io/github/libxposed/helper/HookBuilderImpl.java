@@ -11,11 +11,14 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 
+import java.io.EOFException;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.OutputStream;
+import java.io.StreamCorruptedException;
 import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
@@ -62,6 +65,17 @@ import io.github.libxposed.api.utils.DexParser;
 @SuppressLint("SoonBlockedPrivateApi")
 @SuppressWarnings({"unused", "FieldCanBeLocal", "FieldMayBeFinal", "JavaReflectionMemberAccess"})
 final class HookBuilderImpl implements HookBuilder {
+    private static final Map<Character, Class<?>> PRIMITIVE_TYPE_MAP = Map.of(
+            'Z', boolean.class,
+            'B', byte.class,
+            'C', char.class,
+            'S', short.class,
+            'I', int.class,
+            'J', long.class,
+            'F', float.class,
+            'D', double.class,
+            'V', void.class
+    );
     @NonNull
     private final XposedInterface ctx;
     @NonNull
