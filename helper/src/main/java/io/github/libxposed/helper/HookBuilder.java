@@ -160,12 +160,13 @@ public interface HookBuilder {
      * public void onPackageLoaded(PackageLoadedParam param) {
      *     ApplicationInfo appInfo = param.getApplicationInfo();
      *     var cacheDir = new File(param.getApplicationInfo().dataDir, "cache/libxposed");
-     *     File cacheFile = new File(cacheDir, "parseDex.json");
+     *     // Binary cache produced via ObjectOutputStream (not JSON)
+     *     File cacheFile = new File(cacheDir, "parseDex.bin");
      *
      *     Future<?> future = HookBuilder.buildHooks(this, param.getClassLoader(),
      *             appInfo.sourceDir, builder -> {
      *
-     *         // 1. Setup cache input - read previously saved DEX analysis results
+     *         // 1. Setup cache input - read previously saved binary DEX analysis results
      *         if (cacheFile.exists()) {
      *             try {
      *                 builder.setCacheInputStream(new FileInputStream(cacheFile));
