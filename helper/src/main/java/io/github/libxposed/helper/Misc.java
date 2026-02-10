@@ -260,12 +260,13 @@ final class MatchCache {
             if (clazz == double.class) return "D";
             if (clazz == char.class) return "C";
             if (clazz == void.class) return "V";
-            // Fallback for unknown primitive types (should never happen)
-            throw new IllegalArgumentException("Failed to convert primitive type to descriptor: " + clazz.getName() + ". This is likely a bug in classToDescriptor().");
+            // Fallback for unknown primitive types (should never happen in standard Java)
+            throw new IllegalArgumentException("Unknown primitive type encountered: " + clazz.getName() + ". Please report this issue.");
         }
         String name = clazz.getName();
         if (name.startsWith("[")) {
-            // Array type - getName() already returns the correct descriptor format
+            // Array type - getName() returns descriptor format but uses dots for object arrays
+            // (e.g., [Ljava.lang.String;). Replace dots with slashes for consistency.
             return name.replace('.', '/');
         }
         // Object type - convert to Lpackage/Class; format
