@@ -2723,8 +2723,12 @@ final class HookBuilderImpl implements HookBuilder {
     private final class FieldLazySequenceImpl extends MemberLazySequenceImpl<FieldLazySequence, FieldMatch, Field, FieldMatcher, FieldMatchImpl, FieldMatcherImpl, DexParser.FieldId> implements FieldLazySequence {
         private FieldLazySequenceImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
-            if (key != null && matchCache != null) {
-                addObserver((ListObserver<Field>) matches -> matchCache.fieldListCache.put(key, encodeFields(matches)));
+            if (matchCache != null) {
+                addObserver((ListObserver<Field>) matches -> {
+                    if (key != null) {
+                        matchCache.fieldListCache.put(key, encodeFields(matches));
+                    }
+                });
             }
         }
 
