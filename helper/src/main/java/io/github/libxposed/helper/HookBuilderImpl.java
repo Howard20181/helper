@@ -2846,8 +2846,12 @@ final class HookBuilderImpl implements HookBuilder {
     private final class MethodLazySequenceImpl extends ExecutableLazySequenceImpl<MethodLazySequence, MethodMatch, Method, MethodMatcher, MethodMatchImpl, MethodMatcherImpl> implements MethodLazySequence {
         private MethodLazySequenceImpl(@NonNull ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher) {
             super(rootMatcher);
-            if (key != null && matchCache != null) {
-                addObserver((ListObserver<Method>) matches -> matchCache.methodListCache.put(key, encodeMethods(matches)));
+            if (matchCache != null) {
+                addObserver((ListObserver<Method>) matches -> {
+                    if (key != null) {
+                        matchCache.methodListCache.put(key, encodeMethods(matches));
+                    }
+                });
             }
         }
 
