@@ -39,6 +39,12 @@ final class Reflector {
                 return primitiveClass;
             }
         }
+        // Handle primitive type names (e.g., "int", "boolean", "void")
+        // abbreviationMap maps primitive names to their single-letter descriptors
+        Character primitiveDescriptor = abbreviationMap.get(className);
+        if (primitiveDescriptor != null) {
+            return primitiveClassMap.get(primitiveDescriptor);
+        }
         if (className.startsWith("L") && className.endsWith(";")) {
             className = className.substring(1, className.length() - 1);
         } else if (className.endsWith("[]")) {
