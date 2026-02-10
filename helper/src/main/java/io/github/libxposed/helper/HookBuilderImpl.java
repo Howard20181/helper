@@ -1716,6 +1716,12 @@ final class HookBuilderImpl implements HookBuilder {
             super(rootMatcher, matchFirst);
         }
 
+        /**
+         * Casts the given reflect object to an Executable if it is a Method or Constructor.
+         *
+         * @param reflect the reflection object to cast
+         * @return the reflect object as an Executable, or null if it is neither a Method nor a Constructor
+         */
         @Nullable
         private Executable asExecutable(@NonNull Reflect reflect) {
             if (reflect instanceof Method) {
@@ -1751,12 +1757,18 @@ final class HookBuilderImpl implements HookBuilder {
                 return false;
             }
 
-            // Check invoked methods constraint
-            if (invokedMethods != null) {
-                Executable currentExecutable = asExecutable(reflect);
+            // Cast once for constraint checking
+            Executable currentExecutable = null;
+            if (invokedMethods != null || invokedConstructors != null) {
+                currentExecutable = asExecutable(reflect);
+                // This should never be null at this point due to the instanceof checks above
                 if (currentExecutable == null) {
                     return false;
                 }
+            }
+
+            // Check invoked methods constraint
+            if (invokedMethods != null) {
                 var invokedMethodsSet = methodInvocationsMap.get(currentExecutable);
                 if (invokedMethodsSet == null || invokedMethodsSet.isEmpty()) {
                     return false;
@@ -1771,10 +1783,6 @@ final class HookBuilderImpl implements HookBuilder {
 
             // Check invoked constructors constraint
             if (invokedConstructors != null) {
-                Executable currentExecutable = asExecutable(reflect);
-                if (currentExecutable == null) {
-                    return false;
-                }
                 var invokedConstructorsSet = constructorInvocationsMap.get(currentExecutable);
                 if (invokedConstructorsSet == null || invokedConstructorsSet.isEmpty()) {
                     return false;
