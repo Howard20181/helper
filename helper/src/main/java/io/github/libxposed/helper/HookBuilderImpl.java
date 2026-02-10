@@ -87,6 +87,10 @@ final class HookBuilderImpl implements HookBuilder {
     @NonNull
     private final ConcurrentHashMap<Executable, Set<Constructor<?>>> constructorInvocationsMap = new ConcurrentHashMap<>();
     @NonNull
+    private final ConcurrentHashMap<Executable, Set<Field>> assignedFieldsMap = new ConcurrentHashMap<>();
+    @NonNull
+    private final ConcurrentHashMap<Executable, Set<Field>> accessedFieldsMap = new ConcurrentHashMap<>();
+    @NonNull
     private final HashMap<LazyBind, AtomicInteger> binds = new HashMap<>();
     @NonNull
     private final HashMap<String, ClassMatcherImpl> keyedClassMatchers = new HashMap<>();
@@ -627,12 +631,14 @@ final class HookBuilderImpl implements HookBuilder {
                                 }
 
                                 return (ignored1, ignored2, referredStrings, invokedMethods, accessedFields, assignedFields, opcodes) -> {
-                                    if (invokedMethods.length == 0) {
+                                    // Skip if there's nothing to process
+                                    if (invokedMethods.length == 0 && accessedFields.length == 0 && assignedFields.length == 0) {
                                         return;
                                     }
 
                                     try {
                                         var allMethodIds = dex.getMethodId();
+                                        var allFieldIds = dex.getFieldId();
                                         if (method < 0 || method >= allMethodIds.length) {
                                             return;
                                         }
@@ -703,12 +709,69 @@ final class HookBuilderImpl implements HookBuilder {
                                                 }
                                             }
 
+                                            // Collect all fields accessed by this method
+                                            Set<Field> accessedFieldsSet = new HashSet<>();
+                                            for (int accessedFieldIdx : accessedFields) {
+                                                if (accessedFieldIdx < 0 || accessedFieldIdx >= allFieldIds.length) {
+                                                    continue;
+                                                }
+
+                                                try {
+                                                    var accessedFieldId = allFieldIds[accessedFieldIdx];
+                                                    var fieldClassName = accessedFieldId.getDeclaringClass().getDescriptor().getString();
+                                                    var fieldName = accessedFieldId.getName().getString();
+                                                    var fieldTypeDescriptor = accessedFieldId.getType().getDescriptor().getString();
+
+                                                    var fieldClass = reflector.loadClass(fieldClassName);
+                                                    var fieldType = reflector.loadClass(fieldTypeDescriptor);
+
+                                                    var field = findField(fieldClass, fieldName, fieldType);
+                                                    if (field != null) {
+                                                        accessedFieldsSet.add(field);
+                                                    }
+                                                } catch (ClassNotFoundException e) {
+                                                    // Class not loadable, skip
+                                                }
+                                            }
+
+                                            // Collect all fields assigned by this method
+                                            Set<Field> assignedFieldsSet = new HashSet<>();
+                                            for (int assignedFieldIdx : assignedFields) {
+                                                if (assignedFieldIdx < 0 || assignedFieldIdx >= allFieldIds.length) {
+                                                    continue;
+                                                }
+
+                                                try {
+                                                    var assignedFieldId = allFieldIds[assignedFieldIdx];
+                                                    var fieldClassName = assignedFieldId.getDeclaringClass().getDescriptor().getString();
+                                                    var fieldName = assignedFieldId.getName().getString();
+                                                    var fieldTypeDescriptor = assignedFieldId.getType().getDescriptor().getString();
+
+                                                    var fieldClass = reflector.loadClass(fieldClassName);
+                                                    var fieldType = reflector.loadClass(fieldTypeDescriptor);
+
+                                                    var field = findField(fieldClass, fieldName, fieldType);
+                                                    if (field != null) {
+                                                        assignedFieldsSet.add(field);
+                                                    }
+                                                } catch (ClassNotFoundException e) {
+                                                    // Class not loadable, skip
+                                                }
+                                            }
+
                                             // Store the invocation relationships
                                             if (!invokedMethodsSet.isEmpty()) {
                                                 methodInvocationsMap.put(currentExecutable, invokedMethodsSet);
                                             }
                                             if (!invokedConstructorsSet.isEmpty()) {
                                                 constructorInvocationsMap.put(currentExecutable, invokedConstructorsSet);
+                                            }
+                                            // Store the field access/assignment relationships
+                                            if (!accessedFieldsSet.isEmpty()) {
+                                                accessedFieldsMap.put(currentExecutable, accessedFieldsSet);
+                                            }
+                                            if (!assignedFieldsSet.isEmpty()) {
+                                                assignedFieldsMap.put(currentExecutable, assignedFieldsSet);
                                             }
                                         } catch (Exception e) {
                                             if (exceptionHandler != null) {
@@ -796,6 +859,34 @@ final class HookBuilderImpl implements HookBuilder {
             try {
                 return current.getDeclaredMethod(methodName, parameterTypes);
             } catch (NoSuchMethodException e) {
+                // Try superclass
+                current = current.getSuperclass();
+            }
+        }
+
+        return null;
+    }
+
+    private Field findField(Class<?> clazz, String fieldName, Class<?> fieldType) {
+        // Try public fields first (includes inherited public fields)
+        try {
+            Field field = clazz.getField(fieldName);
+            if (field.getType().equals(fieldType)) {
+                return field;
+            }
+        } catch (NoSuchFieldException e) {
+            // Not a public field, walk the hierarchy
+        }
+
+        // Walk the class hierarchy for non-public fields
+        Class<?> current = clazz;
+        while (current != null) {
+            try {
+                Field field = current.getDeclaredField(fieldName);
+                if (field.getType().equals(fieldType)) {
+                    return field;
+                }
+            } catch (NoSuchFieldException e) {
                 // Try superclass
                 current = current.getSuperclass();
             }
@@ -3374,9 +3465,16 @@ final class HookBuilderImpl implements HookBuilder {
             dexAnalysis = true;
             final var m = new FieldLazySequenceImpl(rootMatcher);
             addObserver((ItemObserver<Reflect>) result -> {
-                // DEX analysis will populate assigned fields
-                // The actual implementation requires DEX parsing to extract field assignment information
-                m.match(Collections.emptyList());
+                if (result instanceof Method || result instanceof Constructor) {
+                    var assignedFieldsSet = assignedFieldsMap.get(result);
+                    if (assignedFieldsSet != null) {
+                        m.match(new ArrayList<>(assignedFieldsSet));
+                    } else {
+                        m.match(Collections.emptyList());
+                    }
+                } else {
+                    m.match(Collections.emptyList());
+                }
             });
             return m;
         }
@@ -3388,9 +3486,16 @@ final class HookBuilderImpl implements HookBuilder {
             dexAnalysis = true;
             final var m = new FieldLazySequenceImpl(rootMatcher);
             addObserver((ItemObserver<Reflect>) result -> {
-                // DEX analysis will populate accessed fields
-                // The actual implementation requires DEX parsing to extract field access information
-                m.match(Collections.emptyList());
+                if (result instanceof Method || result instanceof Constructor) {
+                    var accessedFieldsSet = accessedFieldsMap.get(result);
+                    if (accessedFieldsSet != null) {
+                        m.match(new ArrayList<>(accessedFieldsSet));
+                    } else {
+                        m.match(Collections.emptyList());
+                    }
+                } else {
+                    m.match(Collections.emptyList());
+                }
             });
             return m;
         }
