@@ -120,6 +120,7 @@ final class HookBuilderImpl implements HookBuilder {
     private InputStream cacheInputStream = null;
     @Nullable
     private OutputStream cacheOutputStream = null;
+    private boolean cacheSaved = false;
     private boolean dexAnalysis = false;
     private boolean forceDexAnalysis = false;
     private boolean includeAnnotations = false;
@@ -1121,7 +1122,7 @@ final class HookBuilderImpl implements HookBuilder {
     }
 
     private void saveMatchCache() {
-        if (cacheOutputStream == null || matchCache == null) {
+        if (cacheSaved || cacheOutputStream == null || matchCache == null) {
             return;
         }
         try {
@@ -1139,6 +1140,8 @@ final class HookBuilderImpl implements HookBuilder {
                 out.writeObject(matchCache.constructorCache);
                 out.writeObject(matchCache.parameterCache);
             }
+            cacheSaved = true;
+            cacheOutputStream = null;
         } catch (Throwable e) {
             if (exceptionHandler != null) {
                 exceptionHandler.test(e);
