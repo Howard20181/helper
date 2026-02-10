@@ -1757,14 +1757,11 @@ final class HookBuilderImpl implements HookBuilder {
                 return false;
             }
 
-            // Cast once for constraint checking
+            // Cast once for constraint checking (only needed if constraints are present)
             Executable currentExecutable = null;
             if (invokedMethods != null || invokedConstructors != null) {
+                // Safe to cast here since we already verified reflect is Method or Constructor
                 currentExecutable = asExecutable(reflect);
-                // This should never be null at this point due to the instanceof checks above
-                if (currentExecutable == null) {
-                    return false;
-                }
             }
 
             // Check invoked methods constraint
