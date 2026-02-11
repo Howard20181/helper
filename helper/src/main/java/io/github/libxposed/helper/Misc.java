@@ -177,33 +177,51 @@ abstract class SimpleExecutor {
     }
 
     final void joinAll() throws ExecutionException, InterruptedException {
-        List<Future<?>> tasksToWait = new ArrayList<>();
-        Future<?> task;
-        while ((task = allTasks.poll()) != null) {
-            tasksToWait.add(task);
-        }
-        for (var t : tasksToWait) {
-            t.get();
+        // Keep looping until no new tasks are submitted
+        while (true) {
+            List<Future<?>> tasksToWait = new ArrayList<>();
+            Future<?> task;
+            while ((task = allTasks.poll()) != null) {
+                tasksToWait.add(task);
+            }
+            // If no tasks were found, we're done
+            if (tasksToWait.isEmpty()) {
+                break;
+            }
+            // Wait for all tasks in this batch
+            for (var t : tasksToWait) {
+                t.get();
+            }
+            // Loop again to check if new tasks were submitted during execution
         }
     }
 
     final void joinAll(long timeout, TimeUnit unit) throws ExecutionException, InterruptedException, TimeoutException {
-        // Snapshot the current tasks to avoid infinite loop when new tasks are submitted during execution
-        List<Future<?>> tasksToWait = new ArrayList<>();
-        Future<?> task;
-        while ((task = allTasks.poll()) != null) {
-            tasksToWait.add(task);
-        }
-
         var nanos = unit.toNanos(timeout);
-        var now = System.nanoTime();
-        // Wait for all snapshotted tasks to complete
-        for (var t : tasksToWait) {
-            var last = now;
-            now = System.nanoTime();
-            nanos -= now - last;
-            if (nanos < 0) throw new TimeoutException();
-            t.get(unit.convert(nanos, TimeUnit.NANOSECONDS), TimeUnit.NANOSECONDS);
+        var startTime = System.nanoTime();
+        
+        // Keep looping until no new tasks are submitted or timeout occurs
+        while (true) {
+            // Snapshot the current tasks to process in this iteration
+            List<Future<?>> tasksToWait = new ArrayList<>();
+            Future<?> task;
+            while ((task = allTasks.poll()) != null) {
+                tasksToWait.add(task);
+            }
+            
+            // If no tasks were found, we're done
+            if (tasksToWait.isEmpty()) {
+                break;
+            }
+            
+            // Wait for all tasks in this batch
+            for (var t : tasksToWait) {
+                var elapsed = System.nanoTime() - startTime;
+                var remaining = nanos - elapsed;
+                if (remaining < 0) throw new TimeoutException();
+                t.get(remaining, TimeUnit.NANOSECONDS);
+            }
+            // Loop again to check if new tasks were submitted during execution
         }
     }
 }

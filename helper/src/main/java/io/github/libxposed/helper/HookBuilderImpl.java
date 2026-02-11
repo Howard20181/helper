@@ -1341,6 +1341,8 @@ final class HookBuilderImpl implements HookBuilder {
 
         protected final synchronized SeqImpl build() {
             final var lazySequence = onBuild();
+            // Mark if this is a root sequence (not a dependency sequence)
+            lazySequence.isRootSequence = (rootMatcher == this);
             // specially, if matchFirst is true, propagate the key to the first match
             if (matchFirst && key != null) {
                 final var f = lazySequence.first().setKey(key);
@@ -2513,6 +2515,8 @@ final class HookBuilderImpl implements HookBuilder {
     private abstract class LazySequenceImpl<Base extends LazySequence<Base, Match, Reflect, Matcher>, Match extends ReflectMatch<Match, Reflect, Matcher>, Reflect, Matcher extends ReflectMatcher<Matcher>, MatchImpl extends ReflectMatchImpl<MatchImpl, Match, Reflect, Matcher, MatcherImpl, DexId>, MatcherImpl extends ReflectMatcherImpl<MatcherImpl, Matcher, Reflect, DexId, ?>, DexId extends DexParser.Id<DexId>> implements LazySequence<Base, Match, Reflect, Matcher> {
         @NonNull
         protected final ReflectMatcherImpl<?, ?, ?, ?, ?> rootMatcher;
+        // True if this sequence was built from a root matcher (not a dependency matcher)
+        protected boolean isRootSequence = false;
         @Nullable
         protected String key;
         @NonNull
@@ -2642,7 +2646,8 @@ final class HookBuilderImpl implements HookBuilder {
             if (!this.matches.compareAndSet(null, matches)) return;
 
             // If it's matchFirst and a match is found, update the counter.
-            if (rootMatcher.matchFirst && matches.iterator().hasNext()) {
+            // Only count for root sequences, not dependency sequences that share the same rootMatcher.
+            if (isRootSequence && rootMatcher.matchFirst && matches.iterator().hasNext()) {
                 int found = foundFirstMatchers.incrementAndGet();
                 int total = totalFirstMatchers.get();
 
